@@ -1,0 +1,137 @@
+/**
+ * Types shared between the main process, the preload bridge and the renderer.
+ * Kept dependency-free so it can be imported from unit tests running in Node.
+ */
+
+export type ThemeMode = 'system' | 'light' | 'dark'
+
+export interface Prefs {
+  theme: ThemeMode
+  fontFamily: string
+  fontSize: number
+  editorWidth: number
+  lineHeight: number
+  sourceMode: boolean
+  focusMode: boolean
+  typewriterMode: boolean
+  autoSave: boolean
+  autoSaveMs: number
+  showOutline: boolean
+  spellCheck: boolean
+  smartPaste: boolean
+  autoPair: boolean
+  lastFolder: string | null
+}
+
+export const DEFAULT_PREFS: Prefs = {
+  theme: 'system',
+  fontFamily: '',
+  fontSize: 17,
+  editorWidth: 720,
+  lineHeight: 1.75,
+  sourceMode: false,
+  focusMode: false,
+  typewriterMode: false,
+  autoSave: true,
+  autoSaveMs: 1200,
+  showOutline: true,
+  spellCheck: true,
+  smartPaste: true,
+  autoPair: true,
+  lastFolder: null
+}
+
+export interface FileReadResult {
+  ok: true
+  path: string
+  text: string
+  /** Byte length on disk. */
+  size: number
+  /** Last modification time, ms since epoch. */
+  mtimeMs: number
+  /** Byte order mark present in the file; re-added verbatim on save. */
+  bom: boolean
+  /** Newline convention of the file; re-applied verbatim on save. */
+  eol: '\n' | '\r\n'
+}
+
+export interface FileError {
+  ok: false
+  error: string
+  code?: string
+}
+
+export type FileResult = FileReadResult | FileError
+
+export interface SaveResult {
+  ok: true
+  path: string
+  mtimeMs: number
+  size: number
+  /** True when the file already differed on disk and we wrote a conflict copy instead. */
+  conflictCopy?: string
+  /** True when the on-disk bytes already matched; nothing was written. */
+  unchanged?: boolean
+}
+
+export type SaveOutcome = SaveResult | FileError
+
+export interface DirEntry {
+  name: string
+  path: string
+  isDir: boolean
+}
+
+export interface RecentFile {
+  path: string
+  name: string
+  openedAt: number
+}
+
+export interface RecoveryDraft {
+  path: string | null
+  name: string
+  text: string
+  savedAt: number
+  baseMtimeMs: number
+}
+
+export interface AppInfo {
+  version: string
+  electron: string
+  chrome: string
+  node: string
+}
+
+/** Methods reachable through `window.typing.call()`. */
+export type ApiMethod =
+  | 'appInfo'
+  | 'prefs.get'
+  | 'prefs.set'
+  | 'dialog.openFile'
+  | 'dialog.openFolder'
+  | 'dialog.pickImage'
+  | 'dialog.saveAs'
+  | 'file.read'
+  | 'file.save'
+  | 'file.saveAs'
+  | 'file.stat'
+  | 'file.exists'
+  | 'dir.list'
+  | 'dir.walk'
+  | 'recents.list'
+  | 'recents.add'
+  | 'recents.clear'
+  | 'window.setTitle'
+  | 'window.setRepresentedFile'
+  | 'export.html'
+  | 'export.pdf'
+  | 'assets.saveImage'
+  | 'recovery.save'
+  | 'recovery.clear'
+  | 'recovery.list'
+  | 'recovery.read'
+  | 'shell.openExternal'
+  | 'shell.showItemInFolder'
+  | 'clipboard.readImage'
+  | 'notify'

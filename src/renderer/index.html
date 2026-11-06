@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Typing</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: typing-asset:; font-src 'self' data: typing-asset:; media-src 'self' data: typing-asset:; connect-src 'self' ws://localhost:* http://localhost:*; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'"
+    />
+    <meta name="color-scheme" content="light dark" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="titlebar">
+        <div class="titlebar-spacer"></div>
+        <div id="doc-title" class="doc-title" aria-live="polite">Untitled</div>
+        <div class="titlebar-actions">
+          <button id="btn-source" class="icon-btn" title="Source code mode (⌘/)" aria-label="Toggle source mode">M↓</button>
+          <button id="btn-outline" class="icon-btn" title="Outline (⌘⇧1)" aria-label="Toggle outline">☰</button>
+          <button id="btn-sidebar" class="icon-btn" title="File sidebar (⌘⇧2)" aria-label="Toggle file sidebar">▤</button>
+        </div>
+      </header>
+      <div id="banner" class="banner hidden" role="alert"></div>
+      <div id="workspace">
+        <aside id="sidebar" class="sidebar hidden" aria-label="File explorer">
+          <div class="sidebar-head">
+            <span id="sidebar-folder" class="sidebar-folder">No folder</span>
+            <button id="btn-open-folder" class="icon-btn small" title="Open folder" aria-label="Open folder">+</button>
+          </div>
+          <div id="file-tree" class="file-tree" role="tree" aria-label="Files"></div>
+        </aside>
+        <main id="main" class="main">
+          <div id="editor-host" class="editor-host"></div>
+          <aside id="outline" class="outline" aria-label="Outline">
+            <div class="outline-title">Outline</div>
+            <div id="outline-list" class="outline-list"></div>
+          </aside>
+        </main>
+      </div>
+      <div id="findbar" class="findbar hidden" role="search">
+        <input id="find-input" class="find-input" type="text" placeholder="Find" aria-label="Find" />
+        <button id="find-prev" class="icon-btn small" title="Previous (⇧⏎)" aria-label="Previous match">↑</button>
+        <button id="find-next" class="icon-btn small" title="Next (⏎)" aria-label="Next match">↓</button>
+        <span id="find-count" class="find-count"></span>
+        <button id="find-toggle-replace" class="text-btn" title="Toggle replace">Replace</button>
+        <input id="replace-input" class="find-input replace-input hidden" type="text" placeholder="Replace with" aria-label="Replace with" />
+        <button id="replace-one" class="text-btn hidden" title="Replace">Replace</button>
+        <button id="replace-all" class="text-btn hidden" title="Replace all">All</button>
+        <label class="find-opt"><input id="find-case" type="checkbox" /> Aa</label>
+        <label class="find-opt"><input id="find-word" type="checkbox" /> W</label>
+        <label class="find-opt"><input id="find-regex" type="checkbox" /> .*</label>
+        <button id="find-close" class="icon-btn small" title="Close (Esc)" aria-label="Close find bar">✕</button>
+      </div>
+      <footer id="statusbar" class="statusbar">
+        <span id="status-left" class="status-left"></span>
+        <span class="status-right">
+          <span id="status-cursor"></span>
+          <span id="status-words"></span>
+          <span id="status-mode" class="status-chip"></span>
+          <span id="status-save" class="status-chip"></span>
+        </span>
+      </footer>
+    </div>
+    <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true"></div>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

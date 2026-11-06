@@ -1,0 +1,87 @@
+{
+  "name": "typing",
+  "productName": "Typing",
+  "version": "0.1.0",
+  "description": "Typing - a local-first WYSIWYG markdown editor for macOS",
+  "main": "./out/main/index.js",
+  "author": "Danny",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "package": "npm run build && electron-builder --mac dir --arm64 && codesign --force --deep --sign - release/mac-arm64/Typing.app",
+    "test:unit": "vitest run",
+    "test:smoke": "node test/smoke/smoke.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
+    "@lezer/common": "^1.5.5",
+    "@lezer/highlight": "^1.2.5",
+    "@types/dompurify": "^3.0.5",
+    "@types/katex": "^0.16.8",
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^26.6.6",
+    "dompurify": "^3.4.17",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "katex": "^0.19.1",
+    "markdown-it": "^15.0.3",
+    "mermaid": "^12.3.0",
+    "playwright": "^1.65.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  },
+  "build": {
+    "appId": "dev.danny.typing",
+    "productName": "Typing",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "darkModeSupport": true,
+      "identity": null
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown",
+          "mdown",
+          "mkd"
+        ],
+        "name": "Markdown Document",
+        "role": "Editor",
+        "rank": "Default"
+      }
+    ]
+  }
+}
