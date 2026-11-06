@@ -18,7 +18,17 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
+// Honour Chromium's data-directory switch for Typing's own files too, so a test
+// or a portable run keeps preferences, recents and recovery drafts together.
+const userDataOverride = process.argv.find((arg) => arg.startsWith('--user-data-dir='))
+if (userDataOverride) {
+  app.setPath('userData', resolve(userDataOverride.slice('--user-data-dir='.length)))
+}
+
 let mainWindow: BrowserWindow | null = null
+/** Set once the renderer has confirmed that closing is safe. */
+let allowClose = false
+let quitRequested = false
 /** Directories that `typing-asset://` may serve from (document folders we opened). */
 const assetRoots = new Set<string>()
 /** Files currently open in the window, watched for external modification. */
@@ -299,6 +309,15 @@ const handlers: Record<string, Handler> = {
     mainWindow?.setRepresentedFilename(String(filePath))
     return true
   },
+  async 'window.close'([force]) {
+    if (!mainWindow) return false
+    if (!force) return false
+    allowClose = true
+    mainWindow.close()
+    // A quit that was interrupted by the unsaved-changes guard completes here.
+    if (quitRequested) setTimeout(() => app.quit(), 50)
+    return true
+  },
   async 'window.setDocumentEdited'([edited]) {
     mainWindow?.setDocumentEdited(Boolean(edited))
     return true
@@ -433,9 +452,17 @@ const handlers: Record<string, Handler> = {
     return true
   },
   async 'clipboard.readImage'() {
-    const img = clipboard.readImage()
-    if (img.isEmpty()) return null
-    return img.toDataURL()
+    const items = await clipboard.read()
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith('image/'))
+      if (!type) continue
+      const payload = await item.getType(type)
+      if (payload instanceof Blob) {
+        const bytes = Buffer.from(await payload.arrayBuffer())
+        return `data:${type};base64,${bytes.toString('base64')}`
+      }
+    }
+    return null
   },
   async 'app.doc'([name]) {
     const allowed = new Set(['README.md', 'USAGE.md', 'THIRD_PARTY.md'])
@@ -528,8 +555,15 @@ function createWindow(): void {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('close', (event) => {
+    if (allowClose) return
+    // Never lose unsaved work on ⌘W/⌘Q: ask the renderer first.
+    event.preventDefault()
+    sendCommand('app.close')
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
+    allowClose = false
     for (const path of [...watched.keys()]) unwatchDocument(path)
   })
 
@@ -663,7 +697,11 @@ if (!gotLock) {
     })
   })
 
-  app.on('window-all-closed', () => {
+  app.on('before-quit', () => {
+  quitRequested = true
+})
+
+app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
 }

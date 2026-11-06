@@ -33,6 +33,7 @@ interface Api {
   pathForFile: (file: File) => string
   refreshMenu: () => void
   platform: string
+  testMode: boolean
 }
 
 const api = (window as unknown as { typing: Api }).typing
@@ -877,6 +878,9 @@ async function runCommand(command: string): Promise<void> {
     case 'doc.revert':
       await revertToSaved()
       break
+    case 'app.close':
+      await requestClose()
+      break
     case 'nav.quickOpen':
       if (!folderRoot) {
         ui.toast('Open a folder first')
@@ -1051,6 +1055,29 @@ async function runCommand(command: string): Promise<void> {
   }
 }
 
+/** ⌘W / ⌘Q: save, discard or cancel, then actually close the window. */
+async function requestClose(): Promise<void> {
+  if (!isDirty()) {
+    await api.call('window.close', true)
+    return
+  }
+  const choice = await ui.choiceDialog(
+    'Unsaved changes',
+    `“${doc.path ? doc.path.split('/').pop() : 'Untitled'}” has changes that are not saved.`,
+    [
+      { label: 'Cancel', value: 'cancel' },
+      { label: 'Discard', value: 'discard' },
+      { label: 'Save', value: 'save', primary: true }
+    ]
+  )
+  if (choice === 'cancel' || !choice) return
+  if (choice === 'save') {
+    const ok = await save(false)
+    if (!ok) return
+  }
+  await api.call('window.close', true)
+}
+
 async function showAppDoc(file: string, title: string): Promise<void> {
   const text = await api.call('app.doc', file)
   ui.documentDialog(title, typeof text === 'string' ? text : 'The document is not available in this build.')
@@ -1103,6 +1130,9 @@ declare global {
       getText: () => string
       save: () => Promise<boolean>
       insert: (text: string) => void
+      isDirty: () => boolean
+      path: () => string | null
+      focus: () => void
       tableContext: (pos: number) => unknown
       toggleTask: (pos: number) => void
       stats: () => ReturnType<typeof countStats>
@@ -1110,12 +1140,15 @@ declare global {
   }
 }
 
-if (process.env.NODE_ENV === 'development' || process.env.TYPING_TEST === '1') {
+if (api.testMode) {
   window.__typingTest = {
     openFile: async (path: string) => openFile(path),
     getText: () => editor.getText(),
     save: () => save(false),
     insert: (text: string) => fmt.insertText(editor.view, text),
+    isDirty: () => isDirty(),
+    path: () => doc.path,
+    focus: () => editor.focus(),
     tableContext: (pos: number) => tableContextAt(editor.getText(), pos),
     toggleTask: (pos: number) => {
       const edit = toggleTaskAt(editor.getText(), pos)

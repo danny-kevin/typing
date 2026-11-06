@@ -57,7 +57,11 @@
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "README.md",
+      "USAGE.md",
+      "THIRD_PARTY.md",
+      "TESTLOG.md"
     ],
     "asar": true,
     "mac": {

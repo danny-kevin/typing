@@ -13,7 +13,9 @@ const api = {
   },
   /** Absolute path of an OS-dropped File object. */
   pathForFile: (file: File): string => webUtils.getPathForFile(file),
-  platform: process.platform
+  platform: process.platform,
+  /** Enabled only when the app is launched with TYPING_TEST=1 (test harness). */
+  testMode: process.env.TYPING_TEST === '1'
 }
 
 contextBridge.exposeInMainWorld('typing', api)

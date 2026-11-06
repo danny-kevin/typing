@@ -50,6 +50,7 @@ export const ACCELERATORS: Record<string, string> = {
   'view.sidebar': 'Cmd+Shift+2',
   'view.focus': 'F8',
   'view.typewriter': 'F9',
+  'app.close': 'Cmd+W',
   'app.prefs': 'Cmd+,',
   'app.shortcuts': 'Cmd+Shift+/'
 }

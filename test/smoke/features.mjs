@@ -50,6 +50,7 @@ async function main() {
   const app = await electron.launch({
     executablePath,
     args: [`--user-data-dir=${userData}`, dir],
+    env: { ...process.env, TYPING_TEST: '1' },
     timeout: 60000
   })
   const page = await app.firstWindow({ timeout: 60000 })
@@ -212,6 +213,84 @@ async function main() {
     )
     const pdfBytes = await fs.readFile(exportPdfPath).catch(() => Buffer.alloc(0))
     check('PDF export writes a valid PDF', pdfResult?.ok && pdfBytes.subarray(0, 5).toString() === '%PDF-', `${pdfBytes.length} bytes`)
+
+    // ---- source fidelity on the corpus --------------------------------
+    const corpusDir = join(projectRoot, 'test/corpus')
+    const corpusFiles = (await fs.readdir(corpusDir)).filter((f) => f.endsWith('.md')).sort()
+    let fidelityOk = 0
+    const fidelityProblems = []
+    for (const name of corpusFiles) {
+      const source = join(corpusDir, name)
+      const target = join(dir, `fidelity-${name}`)
+      await fs.copyFile(source, target)
+      const bytesBefore = await fs.readFile(target)
+      const statBefore = await fs.stat(target)
+      await page.evaluate(async (p) => window.__typingTest.openFile(p), target)
+      await page.waitForTimeout(250)
+      await page.evaluate(() => window.__typingTest.focus())
+      await page.keyboard.press('Meta+s')
+      await page.waitForTimeout(320)
+      const bytesAfter = await fs.readFile(target)
+      const statAfter = await fs.stat(target)
+      if (Buffer.compare(bytesBefore, bytesAfter) === 0) fidelityOk++
+      else fidelityProblems.push(`${name}: bytes changed`)
+      if (statBefore.mtimeMs !== statAfter.mtimeMs) fidelityProblems.push(`${name}: rewritten (mtime)`)
+    }
+    check(
+      `open + save is byte-identical for all ${corpusFiles.length} corpus files`,
+      fidelityOk === corpusFiles.length && fidelityProblems.length === 0,
+      fidelityProblems.slice(0, 3).join(' | ')
+    )
+
+    // CRLF files keep CRLF after an edit.
+    const crlfPath = join(dir, 'crlf.md')
+    await fs.writeFile(crlfPath, '# CRLF\r\n\r\nline one\r\nline two\r\n', 'utf8')
+    await page.evaluate(async (p) => window.__typingTest.openFile(p), crlfPath)
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__typingTest.focus())
+    await page.keyboard.press('Meta+ArrowDown')
+    await page.keyboard.type('X')
+    await page.waitForTimeout(200)
+    await page.keyboard.press('Meta+s')
+    await page.waitForTimeout(600)
+    const crlfBytes = await fs.readFile(crlfPath)
+    const crlfText = crlfBytes.toString('utf8')
+    check(
+      'editing a CRLF file keeps CRLF line endings',
+      crlfText.includes('line two\r\n') && crlfText.includes('X') && !/[^\r]\n/.test(crlfText),
+      JSON.stringify(crlfText.slice(-18))
+    )
+
+    // A BOM survives an edit and is not duplicated.
+    const bomPath = join(dir, 'bom.md')
+    await fs.writeFile(bomPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# BOM\n\ntext\n', 'utf8')]))
+    await page.evaluate(async (p) => window.__typingTest.openFile(p), bomPath)
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__typingTest.focus())
+    await page.keyboard.type('!')
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Meta+s')
+    await page.waitForTimeout(600)
+    const bomBytes = await fs.readFile(bomPath)
+    const bomCount = [...bomBytes].filter((b, i) => i < 3 && b === 0xef).length
+    check(
+      'a UTF-8 BOM survives editing exactly once',
+      bomBytes[0] === 0xef && bomBytes[1] === 0xbb && bomBytes[2] === 0xbf && bomCount === 1 && bomBytes.toString('utf8').includes('!'),
+      `${bomBytes.length} bytes`
+    )
+
+    // ---- closing with unsaved changes ---------------------------------
+    await page.evaluate(() => window.__typingTest.focus())
+    await page.keyboard.type('unsaved closing test')
+    await page.waitForTimeout(300)
+    await page.keyboard.press('Meta+w')
+    await page.waitForTimeout(600)
+    const closeDialogTitle = await page.evaluate(() => document.querySelector('.dialog h2')?.textContent ?? '')
+    check('⌘W with unsaved changes asks before closing', /unsaved/i.test(closeDialogTitle), closeDialogTitle)
+    const cancelBtn = page.locator('.dialog .btn', { hasText: 'Cancel' })
+    if (await cancelBtn.count()) await cancelBtn.click()
+    await page.waitForTimeout(400)
+    check('cancelling keeps the document open', (await page.locator('.cm-content').count()) === 1)
 
     check('no renderer errors', logs.length === 0, logs.slice(0, 2).join(' | '))
   } finally {

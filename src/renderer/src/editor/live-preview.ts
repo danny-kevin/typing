@@ -387,16 +387,16 @@ class LanguageBadge extends WidgetType {
   constructor(readonly label: string) {
     super()
   }
-  eq(other: LanguageBadge): boolean {
+  override eq(other: LanguageBadge): boolean {
     return other.label === this.label
   }
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const span = document.createElement('span')
     span.className = 'cm-lang-badge'
     span.textContent = this.label
     return span
   }
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -405,16 +405,16 @@ class HintBadge extends WidgetType {
   constructor(readonly label: string) {
     super()
   }
-  eq(other: HintBadge): boolean {
+  override eq(other: HintBadge): boolean {
     return other.label === this.label
   }
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const span = document.createElement('span')
     span.className = 'cm-hint-badge'
     span.textContent = this.label
     return span
   }
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }

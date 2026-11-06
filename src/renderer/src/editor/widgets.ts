@@ -70,11 +70,11 @@ export class MathWidget extends WidgetType {
     super()
   }
 
-  eq(other: MathWidget): boolean {
+  override eq(other: MathWidget): boolean {
     return other.content === this.content && other.display === this.display
   }
 
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const wrap = document.createElement(this.display ? 'div' : 'span')
     wrap.className = this.display ? 'cm-math-block' : 'cm-math-inline'
     // KaTeX output is generated locally from its own renderer and never contains
@@ -83,7 +83,7 @@ export class MathWidget extends WidgetType {
     return wrap
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -187,11 +187,11 @@ export class MermaidWidget extends WidgetType {
     super()
   }
 
-  eq(other: MermaidWidget): boolean {
+  override eq(other: MermaidWidget): boolean {
     return other.code === this.code
   }
 
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-mermaid'
     const inner = document.createElement('div')
@@ -216,13 +216,13 @@ export class MermaidWidget extends WidgetType {
     return wrap
   }
 
-  destroy(): void {
+  override destroy(): void {
     this.observer?.disconnect()
     this.observer = null
     this.container = null
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return false
   }
 }
@@ -236,11 +236,11 @@ export class ImageWidget extends WidgetType {
     super()
   }
 
-  eq(other: ImageWidget): boolean {
+  override eq(other: ImageWidget): boolean {
     return other.url === this.url && other.alt === this.alt && other.title === this.title
   }
 
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'cm-image'
     const src = resolveAssetUrl(this.url)
@@ -263,7 +263,7 @@ export class ImageWidget extends WidgetType {
     return wrap
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -277,11 +277,11 @@ export class CheckboxWidget extends WidgetType {
     super()
   }
 
-  eq(other: CheckboxWidget): boolean {
+  override eq(other: CheckboxWidget): boolean {
     return other.checked === this.checked && other.pos === this.pos
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'cm-task'
     const input = document.createElement('input')
@@ -303,7 +303,7 @@ export class CheckboxWidget extends WidgetType {
     return wrap
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -317,18 +317,18 @@ export class BulletWidget extends WidgetType {
     super()
   }
 
-  eq(other: BulletWidget): boolean {
+  override eq(other: BulletWidget): boolean {
     return other.ordered === this.ordered
   }
 
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const span = document.createElement('span')
     span.className = 'cm-bullet'
     span.textContent = this.ordered ?? '•'
     return span
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -342,11 +342,11 @@ export class TableWidget extends WidgetType {
     super()
   }
 
-  eq(other: TableWidget): boolean {
+  override eq(other: TableWidget): boolean {
     return other.from === this.from && JSON.stringify(other.model) === JSON.stringify(this.model)
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-table-wrap'
     const table = document.createElement('table')
@@ -385,7 +385,7 @@ export class TableWidget extends WidgetType {
     return wrap
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -395,18 +395,18 @@ export class TableWidget extends WidgetType {
 // ---------------------------------------------------------------------------
 
 export class HrWidget extends WidgetType {
-  eq(): boolean {
+  override eq(): boolean {
     return true
   }
 
-  toDOM(): HTMLElement {
+  override toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-hr-wrap'
     wrap.appendChild(document.createElement('hr'))
     return wrap
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }
@@ -416,11 +416,11 @@ export class FrontMatterWidget extends WidgetType {
     super()
   }
 
-  eq(other: FrontMatterWidget): boolean {
+  override eq(other: FrontMatterWidget): boolean {
     return other.body === this.body
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-frontmatter'
     wrap.title = 'Click to edit front matter'
@@ -443,7 +443,7 @@ export class FrontMatterWidget extends WidgetType {
     return wrap
   }
 
-  ignoreEvent(): boolean {
+  override ignoreEvent(): boolean {
     return true
   }
 }

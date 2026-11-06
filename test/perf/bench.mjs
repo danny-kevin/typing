@@ -16,6 +16,20 @@ const projectRoot = resolve(here, '../..')
 const appPath = process.argv[2] ?? join(projectRoot, 'release/mac-arm64/Typing.app')
 const executablePath = join(appPath, 'Contents/MacOS/Typing')
 
+// Hard watchdog: an Electron instance that refuses to close must never hang the
+// caller (observed once during development on a machine under load).
+const watchdog = setTimeout(() => {
+  console.error('\nbench timed out after 240s — killing Electron and exiting')
+  try {
+    execFileSync('pkill', ['-9', '-f', 'typing-perf-'], { stdio: 'ignore' })
+  } catch {
+    /* nothing to kill */
+  }
+  process.exit(3)
+}, 240_000)
+watchdog.unref?.()
+process.on('exit', () => clearTimeout(watchdog))
+
 execFileSync('node', [join(here, 'generate.mjs')], { stdio: 'inherit' })
 const generated = join(here, 'generated')
 
@@ -89,7 +103,13 @@ async function measure(file) {
     widgets: document.querySelectorAll('.cm-table, .cm-mermaid, .cm-math-block').length
   }))
 
-  await app.close()
+  const proc = app.process()
+  await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))])
+  try {
+    proc.kill('SIGKILL')
+  } catch {
+    /* already gone */
+  }
   return { file: file.split('/').pop(), launchMs, latency: stats(latency), scroll: stats(scroll), content, errors }
 }
 
@@ -109,3 +129,5 @@ for (const file of files) {
 
 await fs.writeFile(join(here, 'last-run.json'), JSON.stringify(report, null, 2))
 console.log('\nwrote test/perf/last-run.json')
+clearTimeout(watchdog)
+process.exit(0)

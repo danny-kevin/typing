@@ -79,8 +79,10 @@ button {
 }
 
 #app {
-  display: grid;
-  grid-template-rows: 40px auto 1fr auto 30px;
+  /* Flex rather than grid: hidden banner/find bars must collapse without
+     shifting the remaining rows. */
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   min-height: 0;
 }
@@ -88,6 +90,7 @@ button {
 /* ---------------------------------------------------------------- titlebar */
 
 #titlebar {
+  flex: 0 0 40px;
   display: grid;
   grid-template-columns: 84px 1fr auto;
   align-items: center;
@@ -160,6 +163,7 @@ button {
 /* ------------------------------------------------------------------ banner */
 
 .banner {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -177,6 +181,7 @@ button {
 /* --------------------------------------------------------------- workspace */
 
 #workspace {
+  flex: 1 1 auto;
   display: flex;
   min-height: 0;
   overflow: hidden;
@@ -261,7 +266,7 @@ button {
 }
 
 .main {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   min-height: 0;
@@ -335,6 +340,7 @@ button {
 /* ---------------------------------------------------------------- find bar */
 
 .findbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -385,6 +391,7 @@ button {
 /* --------------------------------------------------------------- statusbar */
 
 .statusbar {
+  flex: 0 0 30px;
   display: flex;
   justify-content: space-between;
   align-items: center;

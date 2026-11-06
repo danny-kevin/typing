@@ -123,6 +123,7 @@ export type ApiMethod =
   | 'recents.add'
   | 'recents.clear'
   | 'window.setTitle'
+  | 'window.close'
   | 'window.setRepresentedFile'
   | 'export.html'
   | 'export.pdf'

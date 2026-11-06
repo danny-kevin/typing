@@ -55,7 +55,7 @@ export function buildMenu(send: Send, prefs: Prefs): Menu {
           submenu: [cmd('HTML…', 'export.html'), cmd('PDF…', 'export.pdf')]
         },
         { type: 'separator' },
-        { role: 'close' }
+        cmd('Close Window', 'app.close')
       ]
     },
     {

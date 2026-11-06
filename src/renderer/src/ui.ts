@@ -573,3 +573,37 @@ export function documentDialog(title: string, text: string): void {
     body.appendChild(pre)
   }, [{ label: 'Close', primary: true, onClick: (close) => close() }])
 }
+
+
+/** Multi-choice dialog that resolves with the chosen value. */
+export function choiceDialog(
+  title: string,
+  message: string,
+  choices: Array<{ label: string; value: string; primary?: boolean }>
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (value: string | null, close: () => void): void => {
+      settled = true
+      close()
+      resolve(value)
+    }
+    const handle = openDialog(
+      title,
+      (body) => {
+        const p = document.createElement('p')
+        p.textContent = message
+        body.appendChild(p)
+      },
+      choices.map((c) => ({ label: c.label, primary: c.primary, onClick: (close) => finish(c.value, close) }))
+    )
+    const observer = new MutationObserver(() => {
+      if (!document.body.contains(handle.root) && !settled) {
+        settled = true
+        observer.disconnect()
+        resolve(null)
+      }
+    })
+    observer.observe(overlay(), { childList: true })
+  })
+}
