@@ -142,6 +142,8 @@ async function readFileForEditor(path: string): Promise<unknown> {
 
 function watchDocument(path: string, mtimeMs: number): void {
   if (watched.has(path)) return
+  // Only the document in the editor needs change notifications.
+  for (const other of [...watched.keys()]) if (other !== path) unwatchDocument(other)
   watched.set(path, { mtimeMs })
   watchFile(path, { interval: 1500 }, async (curr) => {
     const known = watched.get(path)
@@ -670,4 +672,4 @@ function getPrefsSnapshot(): Prefs {
   return prefsCache ?? DEFAULT_PREFS
 }
 
-export { isDev, assetRoots }
+export { isDev }

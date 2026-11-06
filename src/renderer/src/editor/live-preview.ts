@@ -1,7 +1,7 @@
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view'
 import { Range, StateEffect, StateField } from '@codemirror/state'
 import { scanInlineLine, scanBlocks, type BlockSpan, type ScanLine } from '../../../shared/inline'
-import { parseTable, scanFrontMatter, scanMath, serializeTable } from '../../../shared/markdown'
+import { parseTable, scanFrontMatter, scanMath } from '../../../shared/markdown'
 import {
   BulletWidget,
   CheckboxWidget,
@@ -65,17 +65,27 @@ function pushMark(ranges: Range<Decoration>[], cls: string, from: number, to: nu
   if (to > from) ranges.push(classMark(cls).range(from, to))
 }
 
-export function buildLivePreview(view: EditorView): DecorationSet {
+export interface PreviewBuild {
+  set: DecorationSet
+  startLine: number
+  endLine: number
+}
+
+/** Lines decorated above/below the viewport, so small scrolls need no rebuild. */
+const BACK_MARGIN = 120
+const FORWARD_MARGIN = 220
+
+export function buildLivePreview(view: EditorView): PreviewBuild {
   const state = view.state
   const doc = state.doc
   const ranges: Range<Decoration>[] = []
   const visible = view.visibleRanges
-  if (!visible.length) return Decoration.none
+  if (!visible.length) return { set: Decoration.none, startLine: 1, endLine: 1 }
 
   const firstVisible = doc.lineAt(visible[0].from).number
   const lastVisible = doc.lineAt(visible[visible.length - 1].to).number
-  const startLine = windowStartLine(view, firstVisible)
-  const endLine = Math.min(doc.lines, lastVisible + 40)
+  const startLine = windowStartLine(view, Math.max(1, firstVisible - BACK_MARGIN))
+  const endLine = Math.min(doc.lines, lastVisible + FORWARD_MARGIN)
 
   const lines: ScanLine[] = []
   for (let n = startLine; n <= endLine; n++) {
@@ -370,7 +380,7 @@ export function buildLivePreview(view: EditorView): DecorationSet {
     }
   }
 
-  return Decoration.set(ranges, true)
+  return { set: Decoration.set(ranges, true), startLine, endLine }
 }
 
 class LanguageBadge extends WidgetType {
@@ -459,6 +469,9 @@ const driver = ViewPlugin.fromClass(
       this.view.scrollDOM.removeEventListener('scroll', this.onScroll)
     }
 
+    private coveredStart = 0
+    private coveredEnd = 0
+
     private signature(view: EditorView): string {
       return [
         this.docVersion,
@@ -467,6 +480,16 @@ const driver = ViewPlugin.fromClass(
         viewportKey(view),
         livePreviewOptions.focusMode ? 'f' : '-'
       ].join('|')
+    }
+
+    /** True when the visible range is comfortably inside the decorated window. */
+    private covered(view: EditorView): boolean {
+      const ranges = view.visibleRanges
+      if (!ranges.length || !this.coveredEnd) return false
+      const doc = view.state.doc
+      const first = doc.lineAt(ranges[0].from).number
+      const last = doc.lineAt(ranges[ranges.length - 1].to).number
+      return first > this.coveredStart + 20 && last < this.coveredEnd - 40
     }
 
     private schedule(): void {
@@ -480,11 +503,27 @@ const driver = ViewPlugin.fromClass(
         const view = this.view
         const signature = this.signature(view)
         if (signature === this.dispatchedSignature) return
+        // A scroll that stays inside the already-decorated window needs no work.
+        if (this.covered(view) && signature.split('|')[0] === this.dispatchedSignature.split('|')[0]) {
+          this.dispatchedSignature = signature
+          this.lastSignature = signature
+          return
+        }
         this.dispatchedSignature = signature
         this.lastSignature = signature
+        const started = performance.now()
         try {
-          const decorations = buildLivePreview(view)
-          view.dispatch({ effects: setLiveDecorations.of(decorations) })
+          const build = buildLivePreview(view)
+          this.coveredStart = build.startLine
+          this.coveredEnd = build.endLine
+          const built = performance.now()
+          view.dispatch({ effects: setLiveDecorations.of(build.set) })
+          if ((window as unknown as { __typingPerf?: boolean }).__typingPerf) {
+            const now = performance.now()
+            console.log(
+              `preview:build build=${(built - started).toFixed(1)}ms dispatch=${(now - built).toFixed(1)}ms lines=${build.endLine - build.startLine}`
+            )
+          }
         } catch (err) {
           console.error('Typing live preview failed:', err)
         }
@@ -502,10 +541,3 @@ function viewportKey(view: EditorView): string {
 }
 
 export const livePreview = [livePreviewField, driver]
-
-/** Exposed for the unit tests: how table text should look after a table edit. */
-export function tablePreviewText(text: string): string | null {
-  const lines = text.split('\n')
-  const model = parseTable(lines)
-  return model ? serializeTable(model).join('\n') : null
-}

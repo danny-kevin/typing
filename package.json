@@ -12,8 +12,12 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "package": "npm run build && electron-builder --mac dir --arm64 && codesign --force --deep --sign - release/mac-arm64/Typing.app",
+    "test": "vitest run",
     "test:unit": "vitest run",
-    "test:smoke": "node test/smoke/smoke.mjs",
+    "smoke": "node test/smoke/smoke.mjs",
+    "smoke:features": "node test/smoke/features.mjs",
+    "perf": "node test/perf/bench.mjs",
+    "icon": "node scripts/make-icon.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

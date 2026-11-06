@@ -94,6 +94,8 @@ export class MathWidget extends WidgetType {
 
 let mermaidReady = false
 let mermaidSeq = 0
+/** Rendered diagrams, keyed by source, so scrolling back is free. */
+const mermaidCache = new Map<string, string>()
 
 function initMermaid(dark: boolean): void {
   mermaid.initialize({
@@ -107,9 +109,79 @@ function initMermaid(dark: boolean): void {
   mermaidReady = true
 }
 
+interface MermaidJob {
+  code: string
+  element: HTMLElement
+}
+
+const mermaidQueue: MermaidJob[] = []
+let mermaidBusy = false
+
+/**
+ * Diagrams are rendered one at a time, off the scroll/typing path. A frame that
+ * reveals several diagrams therefore stays cheap: it only creates placeholders.
+ */
+function enqueueMermaid(job: MermaidJob): void {
+  mermaidQueue.push(job)
+  if (!mermaidBusy) scheduleNextDiagram(0)
+}
+
+function scheduleNextDiagram(delay: number): void {
+  mermaidBusy = true
+  window.setTimeout(() => void runNextDiagram(), delay)
+}
+
+async function runNextDiagram(): Promise<void> {
+  const job = mermaidQueue.shift()
+  if (!job) {
+    mermaidBusy = false
+    return
+  }
+  if (!job.element.isConnected) {
+    scheduleNextDiagram(0)
+    return
+  }
+  const cached = mermaidCache.get(job.code)
+  if (cached) {
+    paintDiagram(job.element, cached)
+    scheduleNextDiagram(0)
+    return
+  }
+  const dark = document.documentElement.classList.contains('dark')
+  if (!mermaidReady) initMermaid(dark)
+  try {
+    const { svg } = await mermaid.render(`typing-mermaid-${++mermaidSeq}`, job.code)
+    mermaidCache.set(job.code, svg)
+    if (job.element.isConnected) paintDiagram(job.element, svg)
+  } catch (err) {
+    if (job.element.isConnected) paintDiagram(job.element, null, (err as Error).message, job.code)
+  }
+  scheduleNextDiagram(16)
+}
+
+function paintDiagram(element: HTMLElement, svg: string | null, error?: string, code?: string): void {
+  element.textContent = ''
+  if (svg) {
+    element.innerHTML = svg
+    element.classList.add('done')
+    element.style.cursor = 'text'
+    return
+  }
+  const pre = document.createElement('div')
+  pre.className = 'cm-mermaid-error'
+  pre.textContent = `Diagram error: ${error ?? 'unknown error'}`
+  element.appendChild(pre)
+  if (code) {
+    const src = document.createElement('pre')
+    src.className = 'cm-mermaid-source'
+    src.textContent = code
+    element.appendChild(src)
+  }
+}
+
 export class MermaidWidget extends WidgetType {
   private container: HTMLElement | null = null
-  private observer: MutationObserver | null = null
+  private observer: IntersectionObserver | null = null
 
   constructor(readonly code: string) {
     super()
@@ -119,45 +191,34 @@ export class MermaidWidget extends WidgetType {
     return other.code === this.code
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-mermaid'
     const inner = document.createElement('div')
     inner.className = 'cm-mermaid-inner'
-    inner.textContent = 'Rendering diagram…'
+    const cached = mermaidCache.get(this.code)
+    if (cached) {
+      paintDiagram(inner, cached)
+    } else {
+      inner.textContent = 'Rendering diagram…'
+      // Only pay for layout when the diagram is actually on screen.
+      this.observer = new IntersectionObserver((entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          this.observer?.disconnect()
+          this.observer = null
+          enqueueMermaid({ code: this.code, element: inner })
+        }
+      })
+      this.observer.observe(wrap)
+    }
     wrap.appendChild(inner)
     this.container = inner
-    const dark = document.documentElement.classList.contains('dark')
-    if (!mermaidReady) initMermaid(dark)
-    const id = `typing-mermaid-${++mermaidSeq}`
-    void mermaid
-      .render(id, this.code)
-      .then(({ svg }) => {
-        if (!this.container) return
-        this.container.textContent = ''
-        this.container.innerHTML = svg
-        this.container.classList.add('done')
-        // Allow clicking the diagram to edit its source.
-        this.container.style.cursor = 'text'
-      })
-      .catch((err: Error) => {
-        if (!this.container) return
-        this.container.textContent = ''
-        const pre = document.createElement('div')
-        pre.className = 'cm-mermaid-error'
-        pre.textContent = `Diagram error: ${err.message}`
-        this.container.appendChild(pre)
-        const src = document.createElement('pre')
-        src.className = 'cm-mermaid-source'
-        src.textContent = this.code
-        this.container.appendChild(src)
-      })
-    void view
     return wrap
   }
 
   destroy(): void {
     this.observer?.disconnect()
+    this.observer = null
     this.container = null
   }
 

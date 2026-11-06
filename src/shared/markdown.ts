@@ -140,7 +140,7 @@ export interface ExcludedRanges {
 
 const HTML_LINE_RE = /^ {0,3}<(\/?[a-zA-Z][\w-]*|!--|!DOCTYPE|\?)/
 
-export function scanExcluded(text: string): ExcludedRanges {
+export function scanExcluded(text: string, options: { inlineCode?: boolean } = {}): ExcludedRanges {
   const ranges: ExcludedRanges['ranges'] = []
   const fm = scanFrontMatter(text)
   if (fm) ranges.push({ from: fm.from, to: fm.to, kind: 'frontmatter' })
@@ -154,6 +154,10 @@ export function scanExcluded(text: string): ExcludedRanges {
     while (j + 1 < lines.length && lines[j + 1].text.trim() !== '') j++
     ranges.push({ from: lines[i].from, to: lines[j].to, kind: 'html' })
     i = j
+  }
+  if (options.inlineCode === false) {
+    ranges.sort((a, b) => a.from - b.from)
+    return { ranges }
   }
   // Inline code spans: `...` on a single line.
   for (const line of lines) {
@@ -211,10 +215,14 @@ const SETEXT_RE = /^ {0,3}(=+|-+)\s*$/
 
 /** Visible headings, ignoring anything inside code fences or front matter. */
 export function extractOutline(text: string): OutlineItem[] {
-  const excluded = scanExcluded(text).ranges.filter((r) => r.kind !== 'code' || true)
+  const excluded = scanExcluded(text, { inlineCode: false }).ranges
   const lines = lineInfos(text)
+  // Front matter and fenced code never contribute headings (and a `---` closing
+  // a front matter block must not be mistaken for a setext underline).
   const inCode = (pos: number): boolean =>
-    excluded.some((r) => r.kind === 'code' && pos >= r.from && pos < r.to)
+    excluded.some(
+      (r) => (r.kind === 'code' || r.kind === 'frontmatter') && pos >= r.from && pos < r.to
+    )
   const out: OutlineItem[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -495,19 +503,6 @@ export function setHeadingLevel(text: string, from: number, to: number, level: n
   }
 }
 
-/** Insert a block at the start of the line, adding blank lines as needed. */
-export function insertBlockAt(text: string, pos: number, block: string, selectionOffset?: number): Edit {
-  const { from } = lineRangeAt(text, pos)
-  const needsLeading = from > 0 && text[from - 1] === '\n' ? true : true
-  const prefix = needsLeading ? '' : ''
-  const insert = prefix + block + '\n'
-  const anchor = from + (selectionOffset ?? block.length)
-  return {
-    changes: [{ from, to: from, insert }],
-    selection: { anchor, head: anchor }
-  }
-}
-
 export interface TableEditContext {
   start: number
   end: number
@@ -535,7 +530,8 @@ export function tableContextAt(text: string, pos: number): TableEditContext | nu
     const cells = before.split(/(?<!\\)\|/)
     return Math.max(0, Math.min(model.aligns.length - 1, cells.length - 1))
   }
-  const rowIndex = idx === start ? -1 : idx - start - 1
+  // Row 0 is the first body row; the delimiter row is not a row.
+  const rowIndex = idx <= start + 1 ? -1 : idx - start - 2
   return {
     start: lines[start].from,
     end: lines[end].to,

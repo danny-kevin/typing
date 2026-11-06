@@ -4,3 +4,4 @@ out/
 release/
 .DS_Store
 *.log
+test/perf/generated/

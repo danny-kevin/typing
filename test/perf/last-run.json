@@ -1,0 +1,42 @@
+[
+  {
+    "file": "everyday-100kb.md",
+    "launchMs": 517,
+    "latency": {
+      "median": 3.5,
+      "p95": 7.3,
+      "max": 13.3
+    },
+    "scroll": {
+      "median": 13.9,
+      "p95": 43.2,
+      "max": 43.2
+    },
+    "content": {
+      "chars": 1256,
+      "lines": 53,
+      "widgets": 2
+    },
+    "errors": []
+  },
+  {
+    "file": "stress-1mb.md",
+    "launchMs": 564,
+    "latency": {
+      "median": 5.7,
+      "p95": 7.5,
+      "max": 27.4
+    },
+    "scroll": {
+      "median": 14.5,
+      "p95": 121.7,
+      "max": 121.7
+    },
+    "content": {
+      "chars": 1256,
+      "lines": 53,
+      "widgets": 2
+    },
+    "errors": []
+  }
+]

@@ -63,6 +63,7 @@ export interface DialogHandle {
 
 export function openDialog(title: string, build: (body: HTMLElement, close: () => void) => HTMLElement[] | void, actions: Array<{ label: string; primary?: boolean; onClick: (close: () => void) => void }> = []): DialogHandle {
   const host = overlay()
+  const previouslyFocused = document.activeElement as HTMLElement | null
   host.textContent = ''
   const dialog = document.createElement('div')
   dialog.className = 'dialog'
@@ -78,6 +79,7 @@ export function openDialog(title: string, build: (body: HTMLElement, close: () =
     host.classList.add('hidden')
     host.textContent = ''
     document.removeEventListener('keydown', onKey, true)
+    previouslyFocused?.focus?.()
   }
   const extra = build(body, close)
   if (extra && extra.length) extra.forEach((n) => body.appendChild(n))
@@ -106,6 +108,11 @@ export function openDialog(title: string, build: (body: HTMLElement, close: () =
   host.onmousedown = (e) => {
     if (e.target === host) close()
   }
+  // Move focus into the dialog so keyboard and screen-reader users land there.
+  const focusable = dialog.querySelector<HTMLElement>(
+    'input, select, textarea, button.primary, button'
+  )
+  ;(focusable ?? dialog).focus()
   return { close, root: dialog }
 }
 
@@ -209,6 +216,7 @@ export class FileTree {
       row.dataset.path = entry.path
       row.setAttribute('role', 'treeitem')
       row.setAttribute('tabindex', '0')
+      if (entry.isDir) row.setAttribute('aria-expanded', String(this.expanded.has(entry.path)))
       row.style.paddingLeft = `${6 + depth * 12}px`
       const caret = document.createElement('span')
       caret.className = 'tree-caret'
@@ -457,15 +465,12 @@ export function prefsDialog(prefs: Prefs, onChange: (patch: Partial<Prefs>) => v
     body.appendChild(row('Line height', lineHeight))
 
     const mkToggle = (label: string, key: keyof Prefs, hint?: string): void => {
-      const input = document.createElement('input')
-      input.type = 'checkbox'
-      input.checked = Boolean(prefs[key])
-      input.addEventListener('change', () => onChange({ [key]: input.checked } as Partial<Prefs>))
-      const wrap = document.createElement('input')
-      wrap.type = 'checkbox'
-      wrap.checked = Boolean(prefs[key])
-      wrap.addEventListener('change', () => onChange({ [key]: wrap.checked } as Partial<Prefs>))
-      body.appendChild(row(label, wrap, hint))
+      const box = document.createElement('input')
+      box.type = 'checkbox'
+      box.checked = Boolean(prefs[key])
+      box.setAttribute('aria-label', label)
+      box.addEventListener('change', () => onChange({ [key]: box.checked } as Partial<Prefs>))
+      body.appendChild(row(label, box, hint))
     }
     mkToggle('Autosave', 'autoSave', 'Write to disk shortly after you stop typing')
     mkToggle('Auto-pair brackets and markers', 'autoPair')

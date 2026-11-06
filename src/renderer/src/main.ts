@@ -139,11 +139,18 @@ function applyPrefs(): void {
   livePreviewOptions.focusMode = prefs.focusMode
   editor.setFocusMode(prefs.focusMode)
   $('outline').classList.toggle('hidden', !prefs.showOutline)
-  $('btn-outline').classList.toggle('active', prefs.showOutline)
-  $('btn-source').classList.toggle('active', prefs.sourceMode)
-  $('btn-sidebar').classList.toggle('active', !$('sidebar').classList.contains('hidden'))
+  setToggleState('btn-outline', prefs.showOutline)
+  setToggleState('btn-source', prefs.sourceMode)
+  setToggleState('btn-sidebar', !$('sidebar').classList.contains('hidden'))
   updateModeChip()
   api.refreshMenu()
+}
+
+/** Keep the title-bar toggle buttons in sync with the state they control. */
+function setToggleState(id: string, on: boolean): void {
+  const el = $(id)
+  el.classList.toggle('active', on)
+  el.setAttribute('aria-pressed', String(on))
 }
 
 async function setPrefs(patch: Partial<Prefs>): Promise<void> {
@@ -299,13 +306,6 @@ async function openFile(path: string): Promise<void> {
     eol: result.eol,
     bom: result.bom
   })
-  assetRootsHint(result.path)
-}
-
-function assetRootsHint(path: string): void {
-  // The main process registers the document's folder as an allowed asset root
-  // when reading it; nothing else is needed here.
-  void path
 }
 
 async function openFileDialog(): Promise<void> {
@@ -829,7 +829,7 @@ function wireButtons(): void {
   $('btn-outline').addEventListener('click', () => void setPrefs({ showOutline: !prefs.showOutline }))
   $('btn-sidebar').addEventListener('click', () => {
     const hidden = $('sidebar').classList.toggle('hidden')
-    $('btn-sidebar').classList.toggle('active', !hidden)
+    setToggleState('btn-sidebar', !hidden)
     if (!hidden && !folderRoot) void openFolder()
   })
   $('btn-open-folder').addEventListener('click', () => void openFolder())
@@ -1005,7 +1005,7 @@ async function runCommand(command: string): Promise<void> {
       break
     case 'view.sidebar': {
       const hidden = $('sidebar').classList.toggle('hidden')
-      $('btn-sidebar').classList.toggle('active', !hidden)
+      setToggleState('btn-sidebar', !hidden)
       if (!hidden && !folderRoot) await openFolder()
       break
     }
@@ -1059,10 +1059,12 @@ async function showAppDoc(file: string, title: string): Promise<void> {
 async function pickImage(): Promise<void> {
   const path = await api.call('dialog.pickImage')
   if (!path) return
-  const alt = path.split('/').pop() ?? 'image'
-  fmt.insertImage(editor.view, alt.replace(/\.[a-z0-9]+$/i, ''), path.startsWith(doc.path ? doc.path.replace(/\/[^/]*$/, '') : '\u0000')
-    ? path.replace((doc.path ?? '').replace(/\/[^/]*$/, '') + '/', '')
-    : path)
+  const name = String(path).split('/').pop() ?? 'image'
+  const alt = name.replace(/\.[a-z0-9]+$/i, '')
+  // Prefer a relative link when the image lives next to the document.
+  const dir = doc.path ? doc.path.replace(/\/[^/]*$/, '') : ''
+  const src = dir && String(path).startsWith(`${dir}/`) ? String(path).slice(dir.length + 1) : String(path)
+  fmt.insertImage(editor.view, alt, src)
 }
 
 // ---------------------------------------------------------------------------
