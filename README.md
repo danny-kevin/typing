@@ -40,6 +40,7 @@ npm run dev        # electron-vite dev server with hot reload
 npm test           # unit tests (vitest)
 npm run smoke      # packaged-app end-to-end test
 npm run smoke:features
+npm run smoke:caret    # pointer/caret alignment on the packaged app
 npm run build      # compile main, preload and renderer into out/
 ```
 

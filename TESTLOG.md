@@ -59,7 +59,61 @@ untouched), a CRLF file keeps CRLF after editing, a UTF-8 BOM survives exactly
 once, `⌘W` on a dirty document asks before closing, cancelling keeps the
 document, and no renderer errors.
 
-## 4. Performance — `npm run perf`
+## 4. Pointer/caret alignment — `npm run smoke:caret`
+
+Regression suite for the "the caret is much lower than the mouse pointer" bug.
+It launches the packaged app seven times (fresh document, collapsed front
+matter, source mode, a long scrolled document, outline/focus/typewriter modes, a
+folder launch with the sidebar, two window sizes, devicePixelRatio 2) and, in
+each one, measures two things:
+
+1. **geometry** — no vertical space inside `.cm-content` that sits outside the
+   boxes CodeMirror measures (`contentHeight − padding − Σ line border boxes`);
+2. **behaviour** — a real mouse click (`webContents.sendInputEvent`) must place
+   the caret on the line under the pointer, and a real pointer drag
+   (`page.mouse`, which is what extends a selection; a synthesised
+   `sendInputEvent` mouse move has no button state and does not drag) must end
+   its selection head on the line under the pointer.
+
+Same suite, same packaged bundle, before and after the fix (macOS arm64):
+
+| Build | Result | Unmeasured vertical space | Worst click→caret miss |
+| --- | --- | --- | --- |
+| before (previous `Typing.app`) | 12/27 checks | 126.5 px on the headings document, 101.3 px with a collapsed front-matter chip, 93 px on the mixed document | 317 px, 1/18 clicks correct on the headings document |
+| after (this branch) | **27/27 checks** | 0 px in every scenario | ≤ 11 px (the caret's own leading, constant) |
+
+Failures before the fix were systematic, not random: 0–5 of 18 clicks landed on
+the clicked line, the drift grew with every heading above the click point, and a
+drag selection from a paragraph to a heading ended up to 234 px below the
+pointer. Source mode (no heading/chip decorations) passed 23/23 clicks before the
+fix as well, which is what identified the decorated lines as the trigger.
+
+Cause: CodeMirror 6 builds its height map from `getBoundingClientRect().height`
+of each line, which is the border box — a vertical **margin** on a line is space
+the editor cannot see. `style.css` gave h1–h3 their leading with `margin-top` and
+the collapsed front-matter chip `margin: 6px 24px 12px`, so the document grew by
+exactly the sum of those margins (126.5 px on the headings document) while the
+height map stayed short; every click mapped that many pixels too far down the
+document and the caret was drawn below the pointer. The fix moves that spacing
+into `padding-top` on the line (`.cm-line.cm-h1/h2/h3`, and a
+`.cm-frontmatter-chip` line class from `live-preview.ts`), which is inside the
+measured box. The rendering is unchanged to the pixel: with the same document,
+every line's glyph top and glyph height is identical to the previous build, and
+`.cm-content` keeps exactly the same height (verified by comparing the shipped
+bundle against the new build).
+
+Full suites re-run on the packaged bundle copied to
+`/Users/danny/Projects/typing-build/Typing.app` (macOS arm64, Electron 45.2.3,
+Node 26.4.0, 2026-11-07):
+
+| Suite | Result |
+| --- | --- |
+| `npm test` | 80/80 tests, 4 files |
+| `npm run smoke` | 14/14 checks (one run first reported `0 heading line(s)` under heavy machine load and passed on the immediate rerun; that check reads the DOM before the first decoration pass and is a pre-existing timing sensitivity, not a regression) |
+| `npm run smoke:features` | 28/28 checks |
+| `npm run smoke:caret` | 27/27 checks |
+
+## 5. Performance — `npm run perf`
 
 Generated documents: `everyday-100kb.md` (100 KB) and `stress-1mb.md` (1 MB, with
 tables, code fences, display maths and mermaid diagrams every few sections).
@@ -90,7 +144,7 @@ a time, so they never block typing. Only the visible window (±120/220 lines) is
 decorated; a scroll that stays inside the decorated window costs nothing. Raw
 numbers are in `test/perf/last-run.json`.
 
-## 5. Manual / one-off checks (not part of the automated suites)
+## 6. Manual / one-off checks (not part of the automated suites)
 
 **Crash recovery.** With autosave disabled, typed into a file, waited for the
 draft, `kill -9` the app, relaunched with the same data directory: the
@@ -109,7 +163,7 @@ file and closed the window.
 **Layout.** Window probes at 1180×820 and 700×480: no horizontal overflow, the
 status bar sits flush at the bottom, the outline and sidebar collapse correctly.
 
-## 6. Manual checks performed (screenshots taken locally, not committed)
+## 7. Manual checks performed (screenshots taken locally, not committed)
 
 - Light and dark theme rendering; theme follows the system setting live.
 - Front matter collapsed to a chip when the caret is away, raw when on it.

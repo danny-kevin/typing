@@ -132,6 +132,10 @@ export function buildLivePreview(view: EditorView): PreviewBuild {
           block: false
         }).range(fm.from, Math.min(fm.to, fm.to))
       )
+      // The chip's outside spacing lives on the line as padding: CodeMirror
+      // only measures each line's border box, so margins would be space its
+      // height map cannot see (and mouse clicks would land below the pointer).
+      ranges.push(Decoration.line({ class: 'cm-frontmatter-chip' }).range(doc.line(fm.startLine).from))
       replaced.push({ from: fm.from, to: fm.to })
     } else {
       for (let n = fm.startLine; n <= fm.endLine; n++) {

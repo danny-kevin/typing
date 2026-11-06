@@ -642,13 +642,26 @@ html.dark .dialog .btn.primary {
 
 /* ------------------------------------------------------- editor decorations */
 
+/* Vertical rhythm inside the editor must be padding, never margin. CodeMirror
+   builds its height map from the border box of each line
+   (getBoundingClientRect().height), so a vertical margin is space the editor
+   cannot see: every such margin above the click point shifts the document
+   position the click maps to, and the caret lands further down than the
+   pointer. Longhand padding-top keeps the same spacing inside the measured
+   box. Specificity must beat the theme's `.cm-line { padding: 0 … }`. */
 .cm-heading { font-weight: 650; letter-spacing: -0.011em; }
-.cm-h1 { font-size: 1.9em; line-height: 1.28; margin-top: 0.7em; }
-.cm-h2 { font-size: 1.52em; line-height: 1.32; margin-top: 0.6em; }
-.cm-h3 { font-size: 1.26em; line-height: 1.4; margin-top: 0.45em; }
+.cm-h1 { font-size: 1.9em; line-height: 1.28; }
+.cm-h2 { font-size: 1.52em; line-height: 1.32; }
+.cm-h3 { font-size: 1.26em; line-height: 1.4; }
 .cm-h4 { font-size: 1.12em; line-height: 1.5; }
 .cm-h5 { font-size: 1em; }
 .cm-h6 { font-size: 0.94em; color: var(--muted); }
+.cm-line.cm-h1 { padding-top: 0.7em; }
+.cm-line.cm-h2 { padding-top: 0.6em; }
+.cm-line.cm-h3 { padding-top: 0.45em; }
+/* The collapsed front-matter chip is the only child of its line; its outside
+   spacing has to be the line's padding for the same reason. */
+.cm-line.cm-frontmatter-chip { padding-top: 6px; padding-bottom: 12px; }
 
 .cm-marker {
   color: var(--muted);
@@ -793,7 +806,7 @@ html.dark .dialog .btn.primary {
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 5px 10px;
-  margin: 6px 24px 12px;
+  margin: 0 24px;
   cursor: text;
 }
 .cm-frontmatter-label {
