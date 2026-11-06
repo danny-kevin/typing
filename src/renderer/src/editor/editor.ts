@@ -95,7 +95,9 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
         // Bindings owned by the application (menu bar commands) must not be
         // swallowed by the editor keymap: removing them lets the key event
         // reach the menu accelerator, which dispatches the app command.
-        ...defaultKeymap.filter((b) => b.key !== 'Mod-/'),
+        ...defaultKeymap.filter(
+          (b) => !['Mod-/', 'Mod-[', 'Mod-]', 'Mod-Enter'].includes(b.key ?? '')
+        ),
         ...closeBracketsKeymap,
         ...historyKeymap
       ]),

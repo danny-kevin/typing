@@ -557,3 +557,14 @@ export function confirmDialog(title: string, message: string, confirmLabel: stri
     observer.observe(overlay(), { childList: true })
   })
 }
+export function documentDialog(title: string, text: string): void {
+  openDialog(title, (body) => {
+    const p = document.createElement('p')
+    p.textContent = title
+    const pre = document.createElement('pre')
+    pre.className = 'doc-text'
+    pre.textContent = text
+    body.textContent = ''
+    body.appendChild(pre)
+  }, [{ label: 'Close', primary: true, onClick: (close) => close() }])
+}

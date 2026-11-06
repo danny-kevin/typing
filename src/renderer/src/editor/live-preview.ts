@@ -60,6 +60,11 @@ function classMark(cls: string): Decoration {
   return Decoration.mark({ class: cls })
 }
 
+/** Push a mark decoration, skipping empty ranges (CodeMirror rejects them). */
+function pushMark(ranges: Range<Decoration>[], cls: string, from: number, to: number): void {
+  if (to > from) ranges.push(classMark(cls).range(from, to))
+}
+
 export function buildLivePreview(view: EditorView): DecorationSet {
   const state = view.state
   const doc = state.doc
@@ -207,7 +212,7 @@ export function buildLivePreview(view: EditorView): DecorationSet {
         if (block.marker && !blockActive) {
           ranges.push(Decoration.replace({}).range(block.marker.from, block.marker.to))
         } else if (block.marker) {
-          ranges.push(classMark('cm-marker').range(block.marker.from, block.marker.to))
+          pushMark(ranges, 'cm-marker', block.marker.from, block.marker.to)
         }
         break
       }
@@ -220,7 +225,7 @@ export function buildLivePreview(view: EditorView): DecorationSet {
             if (m) ranges.push(Decoration.replace({}).range(line.from, line.from + m[0].length))
           } else {
             const m = /^( {0,3}>+\s?)/.exec(line.text)
-            if (m) ranges.push(classMark('cm-marker').range(line.from, line.from + m[0].length))
+            if (m) pushMark(ranges, 'cm-marker', line.from, line.from + m[0].length)
           }
         }
         break
@@ -232,7 +237,7 @@ export function buildLivePreview(view: EditorView): DecorationSet {
         if (!m) break
         const markerEnd = line.from + m[0].length
         if (blockActive) {
-          ranges.push(classMark('cm-marker').range(line.from, markerEnd))
+          pushMark(ranges, 'cm-marker', line.from, markerEnd)
         } else {
           const checkbox = new CheckboxWidget(m[4].toLowerCase() === 'x', line.from)
           ranges.push(
@@ -250,19 +255,19 @@ export function buildLivePreview(view: EditorView): DecorationSet {
         const markerFrom = line.from + m[1].length
         const markerTo = line.from + m[0].length
         if (blockActive) {
-          ranges.push(classMark('cm-marker').range(markerFrom, markerTo))
+          pushMark(ranges, 'cm-marker', markerFrom, markerTo)
         } else if (/^[-*+]$/.test(m[2])) {
           ranges.push(
             Decoration.replace({ widget: new BulletWidget(null) }).range(markerFrom, markerFrom + 1)
           )
         } else {
-          ranges.push(classMark('cm-ordered-marker').range(markerFrom, markerFrom + m[2].length))
+          pushMark(ranges, 'cm-ordered-marker', markerFrom, markerFrom + m[2].length)
         }
         break
       }
       case 'html': {
         for (let n = a; n <= b; n++) ranges.push(Decoration.line({ class: 'cm-html' }).range(doc.line(n).from))
-        if (blockActive) ranges.push(classMark('cm-html-active').range(block.from, block.to))
+        if (blockActive) pushMark(ranges, 'cm-html-active', block.from, block.to)
         excluded.push({ from: block.from, to: block.to })
         break
       }
@@ -285,7 +290,7 @@ export function buildLivePreview(view: EditorView): DecorationSet {
     const endsLine = doc.sliceString(to, lineTo.to).trim() === ''
     const activeMath = isLineActive(lineFrom.number) || isLineActive(lineTo.number)
     if (activeMath) {
-      ranges.push(classMark('cm-math-source').range(from, to))
+      pushMark(ranges, 'cm-math-source', from, to)
       continue
     }
     if (span.display && soloOnLine && endsLine) {
@@ -320,29 +325,26 @@ export function buildLivePreview(view: EditorView): DecorationSet {
         }
         case 'code':
           for (const [mf, mt] of span.markers) ranges.push(Decoration.replace({}).range(mf, mt))
-          ranges.push(classMark('cm-inline-code').range(span.textFrom, span.textTo))
+          pushMark(ranges, 'cm-inline-code', span.textFrom, span.textTo)
           break
         case 'strong':
           for (const [mf, mt] of span.markers) ranges.push(Decoration.replace({}).range(mf, mt))
-          ranges.push(classMark('cm-strong').range(span.textFrom, span.textTo))
+          pushMark(ranges, 'cm-strong', span.textFrom, span.textTo)
           break
         case 'em':
           for (const [mf, mt] of span.markers) ranges.push(Decoration.replace({}).range(mf, mt))
-          ranges.push(classMark('cm-em').range(span.textFrom, span.textTo))
+          pushMark(ranges, 'cm-em', span.textFrom, span.textTo)
           break
         case 'strike':
           for (const [mf, mt] of span.markers) ranges.push(Decoration.replace({}).range(mf, mt))
-          ranges.push(classMark('cm-strike').range(span.textFrom, span.textTo))
+          pushMark(ranges, 'cm-strike', span.textFrom, span.textTo)
           break
         case 'highlight':
           for (const [mf, mt] of span.markers) ranges.push(Decoration.replace({}).range(mf, mt))
-          ranges.push(classMark('cm-highlight').range(span.textFrom, span.textTo))
+          pushMark(ranges, 'cm-highlight', span.textFrom, span.textTo)
           break
         case 'link': {
-          ranges.push(classMark('cm-link').range(span.textFrom, span.textTo))
-          if (!resolveAssetUrl(span.url ?? '') && span.url) {
-            ranges.push(classMark('cm-link').range(span.from, span.from))
-          }
+          pushMark(ranges, 'cm-link', span.textFrom, span.textTo)
           for (const [mf, mt] of span.markers) ranges.push(Decoration.replace({}).range(mf, mt))
           break
         }

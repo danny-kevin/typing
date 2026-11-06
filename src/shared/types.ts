@@ -134,4 +134,5 @@ export type ApiMethod =
   | 'shell.openExternal'
   | 'shell.showItemInFolder'
   | 'clipboard.readImage'
+  | 'app.doc'
   | 'notify'

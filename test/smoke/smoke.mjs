@@ -62,11 +62,11 @@ async function main() {
   await fs.writeFile(samplePath, SAMPLE, 'utf8')
 
   console.log(`Launching ${executablePath}`)
+  const userData = join(workDir, 'user-data')
   const app = await electron.launch({
     executablePath,
-    args: [samplePath],
-    timeout: 60000,
-    env: { ...process.env, TYPING_SMOKE: '1' }
+    args: [`--user-data-dir=${userData}`, samplePath],
+    timeout: 60000
   })
   const page = await app.firstWindow({ timeout: 60000 })
   const logs = []

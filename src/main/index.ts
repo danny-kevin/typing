@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell, protocol, net, nativeTheme, clipboard, Notification } from 'electron'
 import { join, dirname, basename, resolve, relative, sep } from 'node:path'
 import { createHash } from 'node:crypto'
-import { promises as fs, watchFile, unwatchFile, existsSync } from 'node:fs'
+import { promises as fs, watchFile, unwatchFile, existsSync, statSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { decodeDoc, encodeDoc, bytesEqual } from '../shared/doc'
@@ -14,7 +14,7 @@ const ASSET_SCHEME = 'typing-asset'
 protocol.registerSchemesAsPrivileged([
   {
     scheme: ASSET_SCHEME,
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false }
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true, bypassCSP: false }
   }
 ])
 
@@ -325,22 +325,30 @@ const handlers: Record<string, Handler> = {
     return { ok: true, path: target, relative: `assets/${name}` }
   },
   async 'export.html'([payload]) {
-    const p = payload as { html: string; suggestedPath?: string }
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      defaultPath: p.suggestedPath,
-      filters: [{ name: 'HTML', extensions: ['html'] }]
-    })
-    if (result.canceled || !result.filePath) return { ok: false, error: 'canceled' }
-    await fs.writeFile(result.filePath, p.html, 'utf8')
-    return { ok: true, path: result.filePath }
+    const p = payload as { html: string; suggestedPath?: string; path?: string }
+    let target = p.path
+    if (!target) {
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        defaultPath: p.suggestedPath,
+        filters: [{ name: 'HTML', extensions: ['html'] }]
+      })
+      if (result.canceled || !result.filePath) return { ok: false, error: 'canceled' }
+      target = result.filePath
+    }
+    await fs.writeFile(target, p.html, 'utf8')
+    return { ok: true, path: target }
   },
   async 'export.pdf'([payload]) {
-    const p = payload as { html: string; suggestedPath?: string; title?: string }
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      defaultPath: p.suggestedPath,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
-    })
-    if (result.canceled || !result.filePath) return { ok: false, error: 'canceled' }
+    const p = payload as { html: string; suggestedPath?: string; title?: string; path?: string }
+    let target = p.path
+    if (!target) {
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        defaultPath: p.suggestedPath,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }]
+      })
+      if (result.canceled || !result.filePath) return { ok: false, error: 'canceled' }
+      target = result.filePath
+    }
     const tmp = join(tmpdir(), `typing-print-${process.pid}-${Date.now()}.html`)
     await fs.writeFile(tmp, p.html, 'utf8')
     const win = new BrowserWindow({
@@ -358,8 +366,8 @@ const handlers: Record<string, Handler> = {
         margins: { top: 0.7, bottom: 0.7, left: 0.7, right: 0.7 },
         preferCSSPageSize: true
       })
-      await fs.writeFile(result.filePath, pdf)
-      return { ok: true, path: result.filePath }
+      await fs.writeFile(target, pdf)
+      return { ok: true, path: target }
     } catch (err) {
       return { ok: false, error: (err as Error).message }
     } finally {
@@ -426,6 +434,16 @@ const handlers: Record<string, Handler> = {
     const img = clipboard.readImage()
     if (img.isEmpty()) return null
     return img.toDataURL()
+  },
+  async 'app.doc'([name]) {
+    const allowed = new Set(['README.md', 'USAGE.md', 'THIRD_PARTY.md'])
+    const file = String(name)
+    if (!allowed.has(file)) return null
+    try {
+      return await fs.readFile(join(app.getAppPath(), file), 'utf8')
+    } catch {
+      return null
+    }
   },
   async notify([payload]) {
     const p = payload as { title: string; body: string }
@@ -538,7 +556,7 @@ function createWindow(): void {
 app.on('open-file', (event, path) => {
   event.preventDefault()
   if (mainWindow) {
-    mainWindow.webContents.send('typing:event', 'file:open-request', { path })
+    openPathFromOutside(path)
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
   } else {
@@ -552,8 +570,22 @@ function fileFromArgv(argv: string[]): string | null {
   const candidate = argv
     .slice(1)
     .reverse()
-    .find((a) => !a.startsWith('-') && /\.(md|markdown|mdown|mkd|mdx|txt)$/i.test(a))
+    .find((a) => !a.startsWith('-') && existsSync(a) && !a.endsWith('.app'))
   return candidate ? resolve(candidate) : null
+}
+
+/** A path from the command line or a dock drop: markdown file or folder. */
+function openPathFromOutside(path: string): void {
+  try {
+    if (existsSync(path) && require('node:fs').statSync(path).isDirectory()) {
+      assetRoots.add(resolve(path))
+      mainWindow?.webContents.send('typing:event', 'folder:open-request', { path: resolve(path) })
+      return
+    }
+  } catch {
+    /* fall through to file handling */
+  }
+  mainWindow?.webContents.send('typing:event', 'file:open-request', { path })
 }
 
 const gotLock = app.requestSingleInstanceLock()
@@ -562,7 +594,7 @@ if (!gotLock) {
 } else {
   app.on('second-instance', (_e, argv) => {
     const file = fileFromArgv(argv)
-    if (file && mainWindow) mainWindow.webContents.send('typing:event', 'file:open-request', { path: file })
+    if (file && mainWindow) openPathFromOutside(file)
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -578,7 +610,12 @@ if (!gotLock) {
         const abs = resolve(raw)
         const allowed = [...assetRoots].some((root) => abs === root || abs.startsWith(root + sep))
         if (!allowed) return new Response('forbidden', { status: 403 })
-        return await net.fetch(pathToFileURL(abs).toString())
+        const upstream = await net.fetch(pathToFileURL(abs).toString())
+        const headers = new Headers(upstream.headers)
+        // The editor page has a file:// origin, so local asset reads need CORS.
+        headers.set('Access-Control-Allow-Origin', '*')
+        headers.set('Cache-Control', 'no-cache')
+        return new Response(upstream.body, { status: upstream.status, headers })
       } catch (err) {
         return new Response(`error: ${(err as Error).message}`, { status: 500 })
       }
@@ -616,9 +653,7 @@ if (!gotLock) {
     const initial = pendingOpenPath ?? fileFromArgv(process.argv)
     pendingOpenPath = null
     if (initial) {
-      mainWindow?.webContents.once('did-finish-load', () =>
-        mainWindow?.webContents.send('typing:event', 'file:open-request', { path: initial })
-      )
+      mainWindow?.webContents.once('did-finish-load', () => openPathFromOutside(initial))
     }
 
     app.on('activate', () => {

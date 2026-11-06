@@ -25,6 +25,7 @@ import {
 import * as ui from './ui'
 import { buildExportHtml } from './export'
 import { livePreviewOptions } from './editor/live-preview'
+import { commandForEvent } from '../../shared/commands'
 
 interface Api {
   call: (method: string, ...args: unknown[]) => Promise<any>
@@ -75,13 +76,6 @@ async function boot(): Promise<void> {
     onFocus: () => {},
     onBlur: () => {}
   })
-  // Search fields are part of the base state; adding them here keeps them alive
-  // across compartment reconfigures for source mode.
-  editor.view.dispatch({
-    effects: [],
-    annotations: []
-  })
-
   wireButtons()
   wireFindBar()
   wireDragAndDrop()
@@ -97,6 +91,9 @@ async function boot(): Promise<void> {
         break
       case 'file:open-request':
         if (payload?.path) void openFile(payload.path)
+        break
+      case 'folder:open-request':
+        if (payload?.path) void loadFolder(payload.path)
         break
       case 'file:external-change':
         void onExternalChange(payload.path)
@@ -331,30 +328,53 @@ async function loadFolder(dir: string, persist = true): Promise<void> {
   if (doc.path) fileTree.select(doc.path)
 }
 
-async function save(saveAs = false, force = false): Promise<boolean> {
+async function save(saveAs = false, keepMine = false): Promise<boolean> {
   let path = doc.path
   if (!path || saveAs) {
     const suggested = path ?? (folderRoot ? `${folderRoot}/Untitled.md` : 'Untitled.md')
     path = await api.call('dialog.saveAs', suggested)
     if (!path) return false
   }
-  const text = editor.getText()
-  const payload = {
-    path,
-    text,
-    baseMtimeMs: doc.baseMtimeMs,
-    eol: doc.eol,
-    bom: doc.bom,
-    force
+
+  // Refuse to write over a file that someone else changed since we read it.
+  if (!saveAs && !keepMine && doc.baseMtimeMs) {
+    const stat = await api.call('file.stat', path)
+    if (stat && Math.abs(stat.mtimeMs - doc.baseMtimeMs) > 1) {
+      await promptExternalChange()
+      return false
+    }
   }
+
+  const text = editor.getText()
+  // `force` is only used when writing to a brand new path; an in-place save
+  // always lets the main process protect a file that changed underneath us.
+  const payload = { path, text, baseMtimeMs: doc.baseMtimeMs, eol: doc.eol, bom: doc.bom, force: saveAs }
   const result = (saveAs ? await api.call('file.saveAs', payload) : await api.call('file.save', payload)) as SaveOutcome
   if (!result || !('ok' in result) || !result.ok) {
     const error = (result as { error?: string })?.error ?? 'unknown error'
     ui.showBanner(`Could not save: ${error}`, [
-      { label: 'Try again', primary: true, onClick: () => void save(saveAs, force) },
+      { label: 'Try again', primary: true, onClick: () => void save(saveAs, keepMine) },
       { label: 'Dismiss', onClick: ui.hideBanner }
     ])
     return false
+  }
+  if (result.conflictCopy) {
+    // The main process protected the file on disk; adopt the copy we just wrote.
+    const copyStat = await api.call('file.stat', result.conflictCopy)
+    doc.path = result.conflictCopy
+    doc.baseMtimeMs = copyStat?.mtimeMs ?? Date.now()
+    doc.savedText = text
+    doc.externalChange = false
+    setDocContext(doc.path)
+    await api.call('recovery.clear', path)
+    updateTitle()
+    updateStatus()
+    ui.showBanner(`The original file changed on disk. Your version was saved as “${result.conflictCopy.split('/').pop()}”.`, [
+      { label: 'Show in Finder', onClick: () => void api.call('shell.showItemInFolder', result.conflictCopy!) },
+      { label: 'Dismiss', onClick: ui.hideBanner }
+    ])
+    await refreshFolderFiles()
+    return true
   }
   const stat = await api.call('file.stat', path)
   doc.path = path
@@ -363,23 +383,41 @@ async function save(saveAs = false, force = false): Promise<boolean> {
   doc.externalChange = false
   setDocContext(path)
   void api.call('recovery.clear', path)
-  if (!folderRoot) {
-    // First save outside a folder: offer the containing directory as root.
-  }
-  if (result.conflictCopy) {
-    doc.savedText = ''
-    ui.showBanner('The file changed on disk. Your version was written to a conflict copy instead of overwriting.', [
-      { label: 'Show copy', onClick: () => void api.call('shell.showItemInFolder', result.conflictCopy) },
-      { label: 'Dismiss', onClick: ui.hideBanner }
-    ])
-    doc.externalChange = true
-  } else {
-    ui.toast(result.unchanged ? 'No changes to save' : 'Saved')
-  }
+  ui.hideBanner()
   updateTitle()
   updateStatus()
+  if (!result.unchanged) ui.toast('Saved')
   await refreshFolderFiles()
   return true
+}
+
+/** Ask the user what to do about a file that changed under our feet. */
+async function promptExternalChange(): Promise<void> {
+  doc.externalChange = true
+  updateTitle()
+  updateSaveChip()
+  ui.showBanner('This file changed on disk while you had unsaved edits.', [
+    {
+      label: 'Reload from disk',
+      onClick: () => {
+        if (doc.path) void openFile(doc.path)
+      }
+    },
+    {
+      label: 'Keep mine as a copy',
+      primary: true,
+      onClick: () => void save(false, true)
+    },
+    {
+      label: 'Ignore',
+      onClick: () => {
+        doc.externalChange = false
+        updateTitle()
+        updateSaveChip()
+        ui.hideBanner()
+      }
+    }
+  ])
 }
 
 async function refreshFolderFiles(): Promise<void> {
@@ -413,24 +451,7 @@ async function onExternalChange(path: string): Promise<void> {
     }
     return
   }
-  doc.externalChange = true
-  updateTitle()
-  updateSaveChip()
-  ui.showBanner('This file changed on disk while you had unsaved edits.', [
-    {
-      label: 'Reload from disk (discard mine)',
-      onClick: () => void openFile(path)
-    },
-    {
-      label: 'Keep mine (save as copy)',
-      primary: true,
-      onClick: async () => {
-        await save(true, true)
-        await onExternalChange(path)
-      }
-    },
-    { label: 'Ignore', onClick: () => { doc.externalChange = false; updateTitle(); updateSaveChip() } }
-  ])
+  await promptExternalChange()
 }
 
 // ---------------------------------------------------------------------------
@@ -784,39 +805,23 @@ function wireLinks(): void {
 }
 
 function wireGlobalKeys(): void {
-  const letters: Record<string, string> = {
-    Slash: 'view.source',
-    KeyB: 'format.bold',
-    KeyI: 'format.italic',
-    KeyE: 'format.code',
-    KeyK: 'format.link',
-    KeyG: 'find.next'
-  }
-
-  document.addEventListener('keydown', (e) => {
-    const meta = e.metaKey || e.ctrlKey
-    if (!meta) {
-      if (e.key === 'Escape' && !$('findbar').classList.contains('hidden')) {
-        closeFind()
+  // Capture phase so application shortcuts win over the editor keymap. Keys that
+  // the editor needs are not in the command table.
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (!$('overlay').classList.contains('hidden')) return
+      const command = commandForEvent(e, api.platform === 'darwin')
+      if (!command) {
+        if (e.key === 'Escape' && !$('findbar').classList.contains('hidden')) closeFind()
+        return
       }
-      return
-    }
-    // The editor keymap no longer swallows these, so the app handles them
-    // directly for an immediate response. `code` keeps Option-modified keys
-    // unambiguous on macOS layouts.
-    let command: string | null = null
-    if (e.code === 'KeyF') command = e.altKey ? 'find.replace' : 'find.open'
-    else if (e.code === 'KeyG') command = e.shiftKey ? 'find.prev' : 'find.next'
-    else if (letters[e.code] && !e.altKey && !e.shiftKey) command = letters[e.code]
-    else if (/^Digit[0-6]$/.test(e.code) && !e.altKey) {
-      const level = Number(e.code.slice(5))
-      command = level === 0 ? 'format.p' : `format.h${level}`
-    }
-    if (!command) return
-    e.preventDefault()
-    e.stopPropagation()
-    void runCommand(command)
-  })
+      e.preventDefault()
+      e.stopPropagation()
+      void runCommand(command)
+    },
+    true
+  )
 }
 
 function wireButtons(): void {
@@ -1030,7 +1035,10 @@ async function runCommand(command: string): Promise<void> {
       ui.shortcutsDialog()
       break
     case 'app.usage':
-      ui.toast('See USAGE.md in the app folder for a full guide')
+      await showAppDoc('USAGE.md', 'Usage Guide')
+      break
+    case 'app.thirdparty':
+      await showAppDoc('THIRD_PARTY.md', 'Third-Party Licenses')
       break
     default:
       if (command.startsWith('format.h') && command.length === 8) {
@@ -1041,6 +1049,11 @@ async function runCommand(command: string): Promise<void> {
       }
       break
   }
+}
+
+async function showAppDoc(file: string, title: string): Promise<void> {
+  const text = await api.call('app.doc', file)
+  ui.documentDialog(title, typeof text === 'string' ? text : 'The document is not available in this build.')
 }
 
 async function pickImage(): Promise<void> {
@@ -1110,10 +1123,25 @@ if (process.env.NODE_ENV === 'development' || process.env.TYPING_TEST === '1') {
   }
 }
 
-boot().catch((err) => {
-  console.error(err)
-  const el = document.createElement('pre')
-  el.textContent = `Typing failed to start: ${(err as Error).stack ?? err}`
-  el.style.padding = '24px'
-  document.body.appendChild(el)
-})
+declare global {
+  interface Window {
+    /**
+     * Renders the current document to a self-contained HTML string. Used by the
+     * Export commands and by the automated export test; it is read-only.
+     */
+    typingExportHtml: () => Promise<string>
+  }
+}
+
+boot()
+  .then(() => {
+    window.typingExportHtml = () =>
+      buildExportHtml(editor.getText(), { title: exportBaseName(), docPath: doc.path })
+  })
+  .catch((err) => {
+    console.error(err)
+    const el = document.createElement('pre')
+    el.textContent = `Typing failed to start: ${(err as Error).stack ?? err}`
+    el.style.padding = '24px'
+    document.body.appendChild(el)
+  })
