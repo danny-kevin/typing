@@ -29,6 +29,7 @@ export const ACCELERATORS: Record<string, string> = {
   'nav.quickOpen': 'Cmd+Shift+O',
   'doc.save': 'Cmd+S',
   'doc.saveAs': 'Cmd+Shift+S',
+  'doc.history': 'Cmd+Shift+H',
   'export.html': 'Cmd+Shift+E',
   'export.pdf': 'Cmd+Alt+P',
   'edit.undo': 'Cmd+Z',

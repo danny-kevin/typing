@@ -909,6 +909,31 @@ html.dark .dialog .btn.primary {
 /* Source mode reads like plain text with syntax colours only. */
 html.source-mode .cm-content { --editor-width: 860px; }
 
+/* Local history: native controls, bounded diff DOM, no rendered Markdown. */
+.dialog.history-sheet { width: min(1100px, 94vw); max-width: 94vw; max-height: 92vh; }
+.history-path { overflow-wrap: anywhere; }
+.history-controls, .history-limits { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin: 12px 0; }
+.history-layout { display: grid; grid-template-columns: minmax(190px, 30%) minmax(0, 1fr); gap: 16px; }
+.history-versions, .history-comparison { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#history-list { width: 100%; min-height: 290px; overflow: auto; font: 12px var(--ui-font); }
+#history-list option { padding: 8px 5px; }
+#history-preview, #history-diff { margin: 0; min-height: 100px; height: 22vh; width: 100%; resize: vertical; overflow: auto; white-space: pre; tab-size: 4; font: 12px/1.55 var(--mono-font-family); padding: 8px; }
+#history-list, #history-preview, #history-diff, .history-limits input { background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 5px; }
+.history-limits input { width: 85px; padding: 5px; }
+.history-sheet .history-hint { font-size: 12px; color: var(--text); }
+.history-sheet #history-notice { color: var(--text); }
+.history-diff-add { background: var(--accent-soft); color: var(--accent); display: block; }
+.history-diff-remove { background: color-mix(in srgb, var(--danger) 12%, var(--bg)); color: var(--danger); display: block; }
+.history-sheet :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.history-sheet button:disabled { opacity: .45; cursor: default; }
+.history-settings { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.history-settings summary { cursor: pointer; padding: 4px 0; }
+.history-sheet .history-snapshot-actions, .history-settings .actions { padding: 10px; flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .history-layout { grid-template-columns: minmax(0, 1fr); }
+  #history-list { min-height: 100px; height: 130px; }
+}
+
 /* Print: used by the PDF export window too. */
 @media print {
   body { background: #fff; }

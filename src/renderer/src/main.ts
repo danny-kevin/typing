@@ -3,7 +3,8 @@ import 'katex/dist/katex.min.css'
 import { EditorView } from '@codemirror/view'
 import { Transaction } from '@codemirror/state'
 import { isolateHistory } from '@codemirror/commands'
-import { encodeDoc, type EncodableDoc } from '../../shared/doc'
+import type { EncodableDoc } from '../../shared/doc'
+import { HistoryPanel } from './history-panel'
 import type { HistoryReason } from '../../shared/history'
 import { effectiveFormat, historyFormat, historyFormatEffect } from './history-format'
 import type { Prefs, FileReadResult, SaveOutcome } from '../../shared/types'
@@ -93,6 +94,12 @@ let outlineTimer = 0
 let findState = { matches: [] as Match[], index: -1, replaceMode: false }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
+const historyPanel = new HistoryPanel({
+  call: (method, ...args) => api.call(method, ...args),
+  context: () => ({ key: doc.id, path: doc.path, format: documentFormat(doc), unsafe: doc.externalChange || doc.deleted || !doc.validUtf8 }),
+  restore: (id, key) => { const target = tabs.items.find(tab => tab.id === key); return target ? restoreHistory(id, target) : Promise.resolve(false) },
+  copy: (id, key) => { const target = tabs.items.find(tab => tab.id === key); return target ? copyHistory(id, target) : Promise.resolve(false) }
+})
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -174,6 +181,7 @@ function applyShortcutLabels(): void {
   set('find-next', 'Next', 'find.next')
   set('btn-open-folder', 'Open folder', 'doc.openFolder')
   set('btn-new-tab', 'New tab', 'tab.new')
+  set('btn-history', 'Local History', 'doc.history')
 }
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => applyThemeClass(event.matches))
@@ -253,6 +261,7 @@ function onDocChange(target = doc): void {
   if (target !== doc) return
   updateTitle()
   document.documentElement.classList.toggle('dirty', isDirty())
+  historyPanel.currentChanged()
   scheduleStatus()
   scheduleOutline()
   if (findState.matches.length) computeMatches()
@@ -436,6 +445,7 @@ function activateTab(target: DocState, focus = true): void {
 }
 
 function refreshActiveDocument(): void {
+  void historyPanel.refresh()
   setDocContext(doc.path ?? '')
   resetFindState()
   updateTitle()
@@ -1378,6 +1388,7 @@ function wireGlobalKeys(): void {
 
 function wireButtons(): void {
   $('btn-new-tab').addEventListener('click', () => void newDocument())
+  $('btn-history').addEventListener('click', () => void historyPanel.open())
   $('tab-list').addEventListener('wheel', e => {
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { e.preventDefault(); $('tab-list').scrollLeft += e.deltaY }
   }, { passive: false })
@@ -1434,6 +1445,9 @@ async function runCommand(command: string): Promise<void> {
       break
     case 'doc.revert':
       await revertToSaved()
+      break
+    case 'doc.history':
+      await historyPanel.open()
       break
     case 'tab.close':
       await closeTab()
@@ -1600,7 +1614,7 @@ async function runCommand(command: string): Promise<void> {
       await exportPdf()
       break
     case 'app.prefs':
-      ui.prefsDialog(prefs, (patch) => void setPrefs(patch))
+      ui.prefsDialog(prefs, (patch) => void setPrefs(patch), () => void historyPanel.open())
       break
     case 'app.about': {
       const info = await api.call('appInfo')

@@ -88,6 +88,7 @@ export function buildMenuTemplate(send: Send, prefs: Prefs, opts: MenuBuildOptio
       cmd('Save', 'doc.save'),
       cmd('Save As…', 'doc.saveAs'),
       cmd('Revert to Saved', 'doc.revert'),
+      cmd('Local History…', 'doc.history'),
       { type: 'separator' },
       {
         label: 'Export',

@@ -414,8 +414,8 @@ export function recentsDialog(
 // Preferences
 // ---------------------------------------------------------------------------
 
-export function prefsDialog(prefs: Prefs, onChange: (patch: Partial<Prefs>) => void): void {
-  openDialog('Preferences', (body) => {
+export function prefsDialog(prefs: Prefs, onChange: (patch: Partial<Prefs>) => void, onHistory?: () => void): void {
+  openDialog('Preferences', (body, close) => {
     const theme = document.createElement('select')
     for (const [value, label] of [
       ['system', 'Follow system'],
@@ -476,6 +476,13 @@ export function prefsDialog(prefs: Prefs, onChange: (patch: Partial<Prefs>) => v
     mkToggle('Auto-pair brackets and markers', 'autoPair')
     mkToggle('Smart paste (HTML → Markdown)', 'smartPaste')
     mkToggle('Spell check', 'spellCheck')
+    if (onHistory) {
+      const history = document.createElement('button')
+      history.className = 'btn'
+      history.textContent = 'Local history settings…'
+      history.addEventListener('click', () => { close(); onHistory() })
+      body.appendChild(row('Local version history', history, 'Privacy, storage limits, opt out and clear history'))
+    }
   }, [{ label: 'Done', primary: true, onClick: (close) => close() }])
 }
 
@@ -507,6 +514,7 @@ export function shortcutsDialog(platform: string = PLATFORM): void {
     ['Next / Previous (alternate)', many('tab.nextAlt', 'tab.previousAlt')],
     ['Tab 1–8 / Last tab', `${k('tab.jump1')}…${k('tab.jump8')} · ${k('tab.jump9')}`],
     ['Save As', k('doc.saveAs')],
+    ['Local History', k('doc.history')],
     ['Source code mode', k('view.source')],
     ['Quick open', k('nav.quickOpen')],
     ['Open folder', k('doc.openFolder')],
