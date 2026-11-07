@@ -313,8 +313,8 @@ including the byte-identical open+save check for all 10 corpus files, CRLF and B
 editing, Chinese IME composition, image paste, external-change conflict copies,
 HTML/PDF export, the data-safety suite (unsaved-work guard on every document
 switch, conflict handling, invalid UTF-8, deleted files, CSP, the asset protocol)
-and the caret/pointer alignment suite. Runtime: smoke ≈7 s, features ≈31 s,
-caret ≈67 s, datasafety ≈100 s.
+and the caret/pointer alignment suite. Runtime on this machine: smoke 7 s,
+features 31 s, caret 67 s, datasafety 83 s.
 
 The end-to-end suites end with an explicit `process.exit()` after printing their
 results: one caret run printed `27/27 checks passed` and then hung until the
