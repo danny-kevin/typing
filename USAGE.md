@@ -14,8 +14,8 @@ The [Windows shortcut table](#windows-shortcuts) at the end lists them all.
 
 | Action | How |
 | --- | --- |
-| New document | `⌘N` (`Ctrl+N`) |
-| Open a file | `⌘O` (`Ctrl+O`), or drag a `.md` file onto the window or the Dock icon |
+| New document tab | `⌘T` or `⌘N` (`Ctrl+T` or `Ctrl+N`) |
+| Open files in tabs | `⌘O` (`Ctrl+O`), supports multiple selection; or drop `.md` files onto the window or Dock icon |
 | Open a folder | `⇧⌥⌘O` (`Ctrl+Alt+Shift+O`), or drag a folder onto the Dock icon |
 | Quick open (folder) | `⇧⌘O` (`Ctrl+Shift+O`), type part of a filename, `↩` |
 | Recent files | File ▸ Recent Files… |
@@ -29,13 +29,19 @@ written at all (the file's modification time stays put, and a file that mixes
 CRLF and LF line endings keeps both). Autosave is on by default and writes
 shortly after you stop typing; you can turn it off in Preferences.
 
-Leaving a document never happens silently. New, open, open recent, quick open,
-the folder tree, a file dropped on the window, a file opened from the Finder or
-the Dock, closing the window and quitting all ask the same question when there
-are unsaved changes: **Save**, **Don't Save** or **Cancel**. On an untitled
-draft, Save asks where to put it first. If the save cannot finish — the disk
-refuses it, you cancel the Save As panel, or another program has the file open
-and changed it — you stay in the document with your text exactly as it was.
+New and Open do not discard the current document: they open another tab.
+Recent files, quick open, the folder tree, file drops, command-line arguments and
+Finder/Dock requests use the same tab opener. An already-open file focuses its
+tab, including symlink aliases; an untouched empty Untitled tab is replaced
+instead of left behind. Quick open ranks an exact filename before name prefixes
+and fuzzy matches.
+
+Closing a dirty tab asks **Save**, **Don't Save** or **Cancel** for that document.
+Save on Untitled asks where to put it first. A failed save, a cancelled Save As
+panel or an unresolved conflict aborts the close. Window close and Quit check
+every dirty tab in strip order; any Cancel or failed save aborts the whole close.
+Earlier Don't Save answers do not discard their text if a later tab cancels
+(the tabs stay open; saves already completed are not undone).
 
 A file whose bytes are not valid UTF-8 is opened as text with replacement
 characters, and Typing refuses to write it back in place: a banner offers
@@ -56,6 +62,30 @@ tells you. If the file is deleted while it is open, Typing says so and keeps you
 text; saving writes the file again. A change is detected by comparing the file's
 content, not its timestamp, so a same-second write by another program is caught
 too.
+
+## Tabs
+
+The tab strip is above the editor. A dot marks unsaved text; `!` marks an
+external change or deletion. Click a tab to switch, drag to reorder, use its ×
+button or middle-click to close, and use + to create a tab. Many tabs scroll
+horizontally (trackpad, scrollbar, or mouse wheel). Each tab retains its own
+undo/redo, selection, scroll position and source/live mode. Autosave and external
+change detection also run for background tabs; activating a conflicted/deleted
+tab shows its own banner. Reload/Revert affects only that document.
+
+| Action | macOS | Windows |
+| --- | --- | --- |
+| New tab | `⌘T` or `⌘N` | `Ctrl+T` or `Ctrl+N` |
+| Close tab (last tab closes window) | `⌘W` | `Ctrl+W` |
+| Close whole window | `⇧⌘W` | `Ctrl+Shift+W` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| Next / previous, alternate | `⇧⌘]` / `⇧⌘[` | `Ctrl+PageDown` / `Ctrl+PageUp` |
+| Jump to tab 1–8 | `⌥⌘1` … `⌥⌘8` | `Ctrl+Alt+1` … `Ctrl+Alt+8` |
+| Last tab | `⌥⌘9` | `Ctrl+Alt+9` |
+
+Existing heading shortcuts `⌘1…6` / `Ctrl+1…6` are unchanged. With keyboard focus
+on a tab, Left/Right, Home/End navigate; Delete closes; Alt+Shift+Left/Right
+reorders it. File and View menus expose the tab commands too.
 
 ## Writing
 
@@ -138,16 +168,26 @@ line height, autosave, auto-pairing, smart paste, spell check.
 
 ## Recovery
 
-Unsaved work is mirrored to a draft every second or so. If the app is killed or
-crashes, the next launch offers to restore the draft. Restored text is not saved
-to the file until you press `⌘S`.
+Each dirty tab has one stable local recovery draft, updated after about 300 ms
+of idle time. If the app is killed or crashes, the next launch offers **every**
+unsaved tab, including multiple Untitled drafts. Restore opens each in its own
+dirty tab with its original base hash and byte-format metadata; changed-on-disk
+files are never silently overwritten. Untitled requires Save As; normal autosave
+settings apply to restored named UTF-8 files. The last few keystrokes before a
+crash may precede the latest draft write.
+
+There is no previous-session reopening preference: clean tabs are deliberately
+not restored on launch. Only unsaved crash-recovery drafts are offered.
 
 ## Keyboard shortcuts, in one place
 
 `Help ▸ Keyboard Shortcuts` lists everything; the full set on macOS:
 
 ```
-New ⌘N · Open ⌘O · Open folder ⇧⌥⌘O · Quick open ⇧⌘O · Save ⌘S · Save as ⇧⌘S
+New tab ⌘T / ⌘N · Close tab ⌘W · Close window ⇧⌘W
+Next/previous tab Ctrl+Tab / Ctrl+Shift+Tab or ⇧⌘] / ⇧⌘[
+Tab 1–8 ⌥⌘1…8 · Last tab ⌥⌘9
+Open ⌘O · Open folder ⇧⌥⌘O · Quick open ⇧⌘O · Save ⌘S · Save as ⇧⌘S
 Source mode ⌘/ · Outline ⇧⌘1 · Sidebar ⇧⌘2 · Focus F8 · Typewriter F9
 Find ⌘F · Replace ⌥⌘F · Next ⌘G · Previous ⇧⌘G
 Bold ⌘B · Italic ⌘I · Strikethrough ⇧⌘X · Inline code ⌘E · Link ⌘K · Image ⇧⌘I
@@ -164,8 +204,11 @@ The same commands on Windows 10/11, as the menu bar and `Help ▸ Keyboard
 Shortcuts` show them:
 
 ```
-New Ctrl+N · Open Ctrl+O · Open folder Ctrl+Alt+Shift+O · Quick open Ctrl+Shift+O
-Save Ctrl+S · Save as Ctrl+Shift+S · Close window Ctrl+W
+New tab Ctrl+T / Ctrl+N · Close tab Ctrl+W · Close window Ctrl+Shift+W
+Next/previous tab Ctrl+Tab / Ctrl+Shift+Tab or Ctrl+PageDown / Ctrl+PageUp
+Tab 1–8 Ctrl+Alt+1…8 · Last tab Ctrl+Alt+9
+Open Ctrl+O · Open folder Ctrl+Alt+Shift+O · Quick open Ctrl+Shift+O
+Save Ctrl+S · Save as Ctrl+Shift+S
 Source mode Ctrl+/ · Outline Ctrl+Shift+1 · Sidebar Ctrl+Shift+2 · Focus F8 · Typewriter F9
 Find Ctrl+F · Replace Ctrl+Alt+F · Next Ctrl+G · Previous Ctrl+Shift+G
 Bold Ctrl+B · Italic Ctrl+I · Strikethrough Ctrl+Shift+X · Inline code Ctrl+E
@@ -185,8 +228,8 @@ Notes for Windows:
   Help, and each item has its own underlined letter. Preferences live in
   `File ▸ Preferences…` (there is no macOS-style application menu) and About
   lives in Help.
-- `File ▸ Exit`, the window's ✕ button, `Alt+F4` and `Ctrl+W` all ask before
-  closing a document with unsaved changes.
+- `File ▸ Exit`, the window's ✕ button and `Alt+F4` check every dirty tab before
+  closing the window. `Ctrl+W` checks and closes just the active tab.
 - Undo/redo are `Ctrl+Z` / `Ctrl+Shift+Z`; `Ctrl+Y` is not bound.
 - On keyboard layouts where AltGr is reported as `Ctrl+Alt` (German, Polish,
   French, …), a `Ctrl+Alt+…` shortcut can be swallowed by the layout instead of

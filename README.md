@@ -14,6 +14,26 @@ from its normal upstream npm package (see [THIRD_PARTY.md](THIRD_PARTY.md)).
   renderer can read images from folders you opened, and nothing else.
 - Rendered HTML is sanitised; document content is never executed.
 
+## Document tabs
+
+Open several documents in one window. Each tab keeps its own text, undo history,
+selection, scroll position, source/live mode, byte-format metadata and recovery
+draft. Opening an already-open file focuses its tab; opening a file replaces only
+an untouched empty Untitled tab. The strip scrolls horizontally, supports drag
+reordering, dirty markers, close buttons and middle-click close.
+
+`⌘T` / `Ctrl+T` creates a tab (`⌘N` / `Ctrl+N` still works); `⌘W` / `Ctrl+W`
+closes a tab, and closes the window only after its last tab. Window close/quit
+checks every dirty tab; Cancel or a failed save keeps the window and all remaining
+work. See [USAGE.md](USAGE.md) for navigation keys and recovery behaviour.
+
+Session restore is deliberately not implemented: clean tabs are not reopened on
+launch. Crash recovery offers every unsaved tab instead. Editors are retained
+while open and destroyed on close. A measured 1,080,890-byte document switched in
+12.8 ms median / 19.0 ms p95 (synchronous work); 50 large dirty-tab open/discard
+cycles showed a renderer-heap plateau after warm-up. See [TESTLOG.md](TESTLOG.md)
+for the measurements, methodology and limits.
+
 ## Run the built app
 
 ### macOS
@@ -89,15 +109,18 @@ npm run smoke      # packaged-app end-to-end test (macOS; Windows: see below)
 npm run smoke:features
 npm run smoke:caret      # pointer/caret alignment on the packaged app
 npm run smoke:datasafety # unsaved-work guard, conflicts, CSP, asset protocol
+npm run smoke:tabs       # tabs, independent undo, crash recovery, 50-cycle stress
 npm run build      # compile main, preload and renderer into out/
 npm run verify:win # inspect release/win-unpacked and the zip
 ```
 
-The four end-to-end suites launch the packaged app. They choose the binary from
+The five end-to-end suites launch the packaged app. They choose the binary from
 the platform (`release/mac-arm64/Typing.app/Contents/MacOS/Typing` on macOS,
 `release/win-unpacked/Typing.exe` on Windows) and use `ControlOrMeta` shortcuts,
 so `npm run smoke`, `npm run smoke:features`, `npm run smoke:caret` and
-`npm run smoke:datasafety` can be run on Windows after `npm run package:win`.
+`npm run smoke:datasafety` and `npm run smoke:tabs` target Windows after
+`npm run package:win` too (not run on Windows in this delivery; symlink checks
+require Windows Developer Mode or permission to create symlinks).
 Override the target with
 `TYPING_APP=<directory>` if the build lives somewhere else.
 
@@ -213,9 +236,11 @@ block and nothing else.
 - `typing-asset://` serves files only from folders the user explicitly opened,
   after resolving both the folder and the requested path with `realpath`, so a
   symlink inside an opened folder cannot reach a file outside it.
-- Every way of leaving a document goes through one unsaved-work guard
-  (`guardUnsavedWork`), and a switch also drops the previous document's undo
-  history, search results and pending autosave.
+- Closing a tab or quitting uses the per-document `guardUnsavedWork`. Switching
+  tabs never discards work or resets undo. Save snapshots text, path and base
+  hash before awaiting; a result is adopted only by its originating tab and
+  generation. Autosave, recovery keys and external-change watches are per tab;
+  closing releases timers, watches, editor views and recovery records.
 - HTML in documents is shown as text and never injected into the DOM. Export
   sanitises with DOMPurify, and remote resources are never fetched.
 - Mermaid renders with `securityLevel: 'strict'`; KaTeX runs with `trust: false`.

@@ -1,5 +1,111 @@
 # Test log
 
+## Document tabs — 2026-11-07
+
+Environment: macOS 26.6.2 (25G83), arm64; Node 26.4.0; packaged Electron
+45.2.3. This section supersedes the older single-document assumptions below.
+
+| Command | Actual result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm run test:unit` | 11 suites, 190 tests pass |
+| `npm run smoke` | 14/14 |
+| `npm run smoke:features` | 28/28 |
+| `npm run smoke:caret` | 27/27 |
+| `npm run smoke:datasafety` | 63/63 |
+| `npm run smoke:tabs` | 57/57, including keyboard reorder and last-tab window close |
+| `npm run perf` | both documents completed within the existing 150s/document, 300s/run watchdogs; no renderer errors |
+| `npm run package` | macOS arm64 app built and ad-hoc signed |
+| `npm run package:win` | Windows x64 zip built; bundled verification 46/46 |
+
+The packaged tab suite opens several real files, focuses duplicates (including a
+symlink alias), replaces untouched Untitled, edits two tabs and checks independent
+undo, selection/source mode and dirty labels, exercises Save / Don't Save / Cancel,
+cancelled Save As and failed saves, and cancels a multi-dirty-tab Quit after an
+earlier discard answer. It drives quick open, recents, folder tree, Finder/Dock
+`open-file` events, real Chromium File drops and multi-file argv; notices a dirty
+background tab's external write/deletion; reloads only its target; preserves BOM,
+mixed endings and base hash; reorders tabs via a real drag; checks overflow,
+keyboard navigation, tab shortcuts, and light/dark strips. A SIGKILL/relaunch
+restores four dirty tabs (one named plus three Untitled) under their stable draft
+keys. Background autosave writes two different files without crossing their text.
+
+### Measurements
+
+A 1,080,890-byte Markdown document and a second tab were switched 40 times in the
+packaged app. Unchanged tabs retain their original EditorView/EditorState and
+syntax/undo state; switching reattaches the panel, rather than calling setText or
+creating another parser. Selection 1000–1005 and scrollTop 2500 were identical
+after switching away and back. The final suite also checks that an edited-then-
+undone empty Untitled is not mistaken for an untouched tab.
+
+| Metric | Median | p95 |
+| --- | ---: | ---: |
+| Synchronous tab activation | 12.8 ms | 19.0 ms |
+| Activation through two animation-frame callbacks | 15.5 ms | 22.8 ms |
+| Existing benchmark, ~100 KB typing → frame | 4.9 ms | 7.9 ms |
+| Existing benchmark, ~1 MB typing → frame | 15.8 ms | 27.8 ms |
+| Existing benchmark, ~100 KB scroll step | 13.9 ms | 68.5 ms |
+| Existing benchmark, ~1 MB scroll step | 23.7 ms | 110.5 ms |
+
+Benchmark cold launch: 570 ms / 688 ms for the small/large document. The frame
+measurements are renderer callbacks, not a high-speed recording of visible pixels.
+
+The tab suite then opened a fresh 1.08 MB copy, edited it and closed it with
+Don't Save **50 times**. CDP full-GC JS heap: 13,926,512 bytes before; 19,902,280
+after 10 cycles; 19,387,800 after 25; 20,133,540 after 50; final 20,130,200.
+Total delta 5.92 MiB, but only about 226 KiB from cycle 10 to 50: warm-up followed
+by a plateau, not retained editor growth per close. Exactly two original tabs
+remained. This measures renderer JS heap and released view/tab identities, not
+whole-process RSS or a proof over an infinite run. Settled close/recovery dialog
+observers are disconnected; Mermaid's rendered-source cache is capped at 64.
+
+### Existing-test updates and defects found
+
+- `datasafety.mjs`: guard tests now close a tab with Cmd/Ctrl+W instead of
+  destructively replacing it with New. Quick open/Finder/new preserve dirty tabs
+  instead of asking to discard; the suite returns to those tabs to check text.
+  The pending-autosave discard check closes its own tab, with an empty neighbour.
+  All encoding, mixed-ending, hash-conflict, deleted-file, invalid-UTF-8, asset
+  containment, spellcheck and CSP assertions remain in place.
+- `features.mjs`: supplies the corpus's missing `assets/picture.png` because new
+  resident views render it immediately; teardown explicitly destroys this test's
+  isolated windows, instead of waiting on dirty background tabs' quit dialogs.
+- Menu unit tests allow explicit Ctrl+Tab alongside platform-primary shortcuts;
+  new tests cover Windows PageUp/PageDown, preserved heading shortcuts, tab
+  jumps, multi-argv startup, model ownership and real CodeMirror histories.
+- A pre-existing quick-open ranking defect was found: an exact filename in a
+  nested folder could lose to prefix/fuzzy results. Firstmate authorized the
+  small correction: case-insensitive exact filename > filename prefix > fuzzy,
+  backed by a red/green unit test. The automated exact-result selection avoids
+  the legacy picker's mouseenter node-replacement churn; features still tests
+  keyboard selection.
+- The bounded perf runner now generates its temporary corpus under its owned
+  temporary directory and accepts `TYPING_PERF_OUTPUT`, so proof need not modify
+  the source tree.
+
+### Scope and unverified items
+
+No session reopening was implemented; launch offers only unsaved recovery drafts.
+No packages were added, and the packaged CSP is unchanged. Recovery is debounced:
+the last edits before the latest draft write can still be absent after a crash.
+Memory grows with documents intentionally kept open; the plateau check concerns
+closed documents. Existing preview/large-Mermaid limitations still apply.
+
+The Windows zip was built and statically verified on this Mac, **not run on a
+Windows machine**. Native Windows dialogs, AltGr/IME layouts, Explorer file
+associations, Windows tab rendering, and Windows runtime performance remain
+unverified. Finder/Dock delivery is tested by the real Electron open-file event,
+not a physical Dock drag; file drop uses real local File objects via Chromium.
+Screen-reader speech and whole-process RSS were not profiled.
+
+Raw logs, JSON measurements and reviewed light/dark screenshots are retained in
+`/Users/danny/Projects/firstmate/data/typing-tabs-t3/` (not packaged). Delivered
+copies are `/Users/danny/Projects/typing-build/Typing.app` and
+`/Users/danny/Projects/typing-build/Typing-win-x64.zip`.
+
+---
+
 All results below were produced by running the commands in this file, against the
 packaged `release/mac-arm64/Typing.app` built from this branch. Nothing here is an
 estimate; rerun the commands to reproduce.
