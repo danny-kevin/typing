@@ -140,9 +140,34 @@ async function atomicWrite(
       await fs.rm(tmp, { force: true }).catch(() => {})
       return 'changed'
     }
-    await fs.rename(tmp, path)
-    const st = await fs.stat(path)
-    return { mtimeMs: st.mtimeMs, size: st.size, recreated: verdict === 'deleted' }
+    // Windows refuses to replace a file another process has open (an editor, an
+    // antivirus scanner, a sync client). Retry briefly, then fall back to writing
+    // in place rather than losing the user's save.
+    const delays = process.platform === 'win32' ? [0, 40, 120, 300] : [0]
+    let lastError: unknown = null
+    for (const delay of delays) {
+      if (delay) await new Promise((r) => setTimeout(r, delay))
+      try {
+        await fs.rename(tmp, path)
+        const st = await fs.stat(path)
+        return { mtimeMs: st.mtimeMs, size: st.size, recreated: verdict === 'deleted' }
+      } catch (err) {
+        lastError = err
+        const code = (err as NodeJS.ErrnoException).code
+        if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') break
+      }
+    }
+    if (process.platform === 'win32') {
+      try {
+        await fs.writeFile(path, bytes)
+        await fs.rm(tmp, { force: true }).catch(() => {})
+        const st = await fs.stat(path)
+        return { mtimeMs: st.mtimeMs, size: st.size, recreated: verdict === 'deleted' }
+      } catch {
+        /* fall through to the error the rename produced */
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('could not replace the file')
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {})
     throw err

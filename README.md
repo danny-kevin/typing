@@ -87,16 +87,18 @@ npm run dev        # electron-vite dev server with hot reload
 npm test           # unit tests (vitest)
 npm run smoke      # packaged-app end-to-end test (macOS; Windows: see below)
 npm run smoke:features
-npm run smoke:caret    # pointer/caret alignment on the packaged app
+npm run smoke:caret      # pointer/caret alignment on the packaged app
+npm run smoke:datasafety # unsaved-work guard, conflicts, CSP, asset protocol
 npm run build      # compile main, preload and renderer into out/
 npm run verify:win # inspect release/win-unpacked and the zip
 ```
 
-The three end-to-end suites launch the packaged app. They choose the binary from
+The four end-to-end suites launch the packaged app. They choose the binary from
 the platform (`release/mac-arm64/Typing.app/Contents/MacOS/Typing` on macOS,
 `release/win-unpacked/Typing.exe` on Windows) and use `ControlOrMeta` shortcuts,
-so `npm run smoke`, `npm run smoke:features` and `npm run smoke:caret` can be run
-on Windows after `npm run package:win`. Override the target with
+so `npm run smoke`, `npm run smoke:features`, `npm run smoke:caret` and
+`npm run smoke:datasafety` can be run on Windows after `npm run package:win`.
+Override the target with
 `TYPING_APP=<directory>` if the build lives somewhere else.
 
 Node 26 is what this repository was built with; any current LTS Node works. The
@@ -196,12 +198,6 @@ files, files with no trailing newline, lone `\r` characters that are not line
 endings, invalid UTF-8, and edits inside a mixed file that must leave the other
 endings alone.
 
-One honest limit: the irregular endings of a mixed file are remembered by line
-position. Opening a mixed-ending file and saving it untouched is byte-identical,
-and editing a line keeps every other ending where it was, but inserting or
-deleting whole blocks later in the file can move an irregular ending by a line.
-A file whose endings are all the same — which is what every editor on both
-platforms produces — has no such case.
 
 Unsupported syntax is never parsed into a structure and then rebuilt: it is text,
 so it survives. Edits are plain text splices, so a table edit rewrites the table

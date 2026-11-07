@@ -390,7 +390,7 @@ let guardInFlight = false
 async function guardUnsavedWork(): Promise<boolean> {
   if (!isDirty()) return true
   if (guardInFlight) return false
-  const name = doc.path ? (doc.path.split('/').pop() ?? 'Untitled') : 'Untitled'
+  const name = doc.path ? baseName(doc.path) : 'Untitled'
   guardInFlight = true
   try {
     const choice = await ui.choiceDialog(

@@ -25,8 +25,14 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, '../..')
-const appPath = process.argv[2] ?? join(projectRoot, 'release/mac-arm64/Typing.app')
-const executablePath = join(appPath, 'Contents/MacOS/Typing')
+const appPath =
+  process.env.TYPING_APP ??
+  process.argv[2] ??
+  join(projectRoot, 'release', process.platform === 'darwin' ? 'mac-arm64/Typing.app' : 'win-unpacked')
+// The packaged app lives in a bundle on macOS and in a plain folder on Windows/Linux.
+const executablePath =
+  process.env.TYPING_EXE ??
+  (process.platform === 'darwin' ? join(appPath, 'Contents/MacOS/Typing') : join(appPath, 'Typing.exe'))
 
 const results = []
 function check(name, ok, detail = '') {
@@ -121,7 +127,7 @@ async function openFileAnswering(page, name, choice = "Don't Save") {
 
 async function focusEnd(page) {
   await page.locator('.cm-content').click()
-  await page.keyboard.press('Meta+ArrowDown')
+  await page.keyboard.press('ControlOrMeta+ArrowDown')
   await page.waitForTimeout(150)
 }
 
@@ -133,7 +139,7 @@ async function poke(page, ch = 'x') {
 
 /** Turn the autosave preference on or off through the real Preferences dialog. */
 async function setAutosave(page, on) {
-  await page.keyboard.press('Meta+,')
+  await page.keyboard.press('ControlOrMeta+,')
   await page.waitForTimeout(500)
   const box = page.locator('.dialog .row', { hasText: 'Autosave' }).locator('input[type=checkbox]').first()
   const found = (await box.count()) > 0
@@ -183,7 +189,7 @@ console.log('\n1. Unsaved-work guard')
     await page.locator('.cm-content').click()
     await page.keyboard.type('UNSAVED_SENTINEL')
     await page.waitForTimeout(300)
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(700)
     const title = await dialogTitle(page)
     check('⌘N on an untitled draft asks before discarding it', /unsaved/i.test(title ?? ''), String(title))
@@ -195,7 +201,7 @@ console.log('\n1. Unsaved-work guard')
 
     // A cancelled Save As must not switch either: the old code ignored the result.
     await fs.writeFile(saveAsScript, 'canceled', 'utf8')
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(600)
     await clickDialog(page, 'Save')
     await page.waitForTimeout(700)
@@ -205,7 +211,7 @@ console.log('\n1. Unsaved-work guard')
     // Save on an untitled draft goes through Save As, and only then switches.
     const rescuedTarget = docPath('rescued-draft.md')
     await fs.writeFile(saveAsScript, rescuedTarget, 'utf8')
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(600)
     await clickDialog(page, 'Save')
     await page.waitForTimeout(1200)
@@ -221,7 +227,7 @@ console.log('\n1. Unsaved-work guard')
     await poke(page)
     await page.keyboard.type('NAMED_EDIT')
     await page.waitForTimeout(150)
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(700)
     check('⌘N on a named dirty document asks too', /unsaved/i.test((await dialogTitle(page)) ?? ''))
     await clickDialog(page, 'Cancel')
@@ -229,7 +235,7 @@ console.log('\n1. Unsaved-work guard')
     check('Cancel did not write anything to disk', !(await readText('second.md')).includes('NAMED_EDIT'))
 
     await poke(page)
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(600)
     await clickDialog(page, "Don't Save")
     await page.waitForTimeout(500)
@@ -241,7 +247,7 @@ console.log('\n1. Unsaved-work guard')
     await poke(page)
     await page.keyboard.type('SAVE_THEN_SWITCH')
     await page.waitForTimeout(150)
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(600)
     await clickDialog(page, 'Save')
     await page.waitForTimeout(1200)
@@ -254,7 +260,7 @@ console.log('\n1. Unsaved-work guard')
     await poke(page)
     await page.keyboard.type('QUICK_OPEN_EDIT')
     await page.waitForTimeout(150)
-    await page.keyboard.press('Meta+Shift+O')
+    await page.keyboard.press('ControlOrMeta+Shift+O')
     await page.waitForTimeout(500)
     const quickOpenShown = (await page.locator('.quick-input').count()) === 1
     await page.keyboard.type('second')
@@ -291,7 +297,7 @@ console.log('\n1. Unsaved-work guard')
 
     // ---- window close ---------------------------------------------------
     await poke(page)
-    await page.keyboard.press('Meta+w')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(700)
     check('⌘W asks through the same guard', /unsaved/i.test((await dialogTitle(page)) ?? ''))
     await clickDialog(page, 'Cancel')
@@ -315,7 +321,7 @@ console.log('\n1b. A pending autosave is dropped when the document is left')
     await focusEnd(page)
     await page.keyboard.type('AUTOSAVE_MUST_NOT_LEAK')
     await page.waitForTimeout(150)
-    await page.keyboard.press('Meta+n')
+    await page.keyboard.press('ControlOrMeta+n')
     await page.waitForTimeout(500)
     await clickDialog(page, "Don't Save")
     await page.waitForTimeout(2400)
@@ -343,13 +349,13 @@ console.log('\n2. Undo history and in-flight saves stay with their document')
     await openFile(page, 'plain.md')
     await focusEnd(page)
     await page.keyboard.type('ALPHA_TEXT')
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(800)
     await openFile(page, 'second.md')
     const secondText = await text(page)
-    await page.keyboard.press('Meta+z')
+    await page.keyboard.press('ControlOrMeta+z')
     await page.waitForTimeout(300)
-    await page.keyboard.press('Meta+z')
+    await page.keyboard.press('ControlOrMeta+z')
     await page.waitForTimeout(300)
     const afterUndo = await text(page)
     check('⌘Z after switching documents does not restore the previous file', afterUndo === secondText, JSON.stringify(afterUndo.slice(0, 30)))
@@ -391,7 +397,7 @@ console.log('\n3. Mixed line endings')
     const statBefore = await fs.stat(docPath('mixed.md'))
     await openFile(page, 'mixed.md')
     await focusEnd(page)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(900)
     check(
       'open + save keeps the exact bytes of one\\r\\ntwo\\r\\nthree\\n',
@@ -403,7 +409,7 @@ console.log('\n3. Mixed line endings')
     await focusEnd(page)
     await page.keyboard.type('\nfour')
     await page.waitForTimeout(250)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(900)
     check(
       'an edit keeps the existing CRLF/LF lines and gives the new line the dominant CRLF',
@@ -414,14 +420,14 @@ console.log('\n3. Mixed line endings')
     const bomBefore = await read('mixed-bom.md')
     await openFile(page, 'mixed-bom.md')
     await focusEnd(page)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(800)
     check('a BOM + mixed-ending file is unchanged by open + save', Buffer.compare(await read('mixed-bom.md'), bomBefore) === 0)
 
     await focusEnd(page)
     await page.keyboard.type('!')
     await page.waitForTimeout(250)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(900)
     const bomAfter = await read('mixed-bom.md')
     check(
@@ -450,7 +456,7 @@ console.log('\n4. Files that are not valid UTF-8')
     await focusEnd(page)
     await page.keyboard.type('EDIT')
     await page.waitForTimeout(250)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(900)
     check('⌘S does not overwrite the original bytes', Buffer.compare(await read('invalid.md'), before) === 0)
     const saveBanner = await bannerText(page)
@@ -503,7 +509,7 @@ console.log('\n5. Concurrent writers and deleted files')
     await focusEnd(page)
     await page.keyboard.type('MINE')
     await page.waitForTimeout(250)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(1200)
     const raceNow = await readText('race.md')
     const filesAfterRace = await fs.readdir(folder)
@@ -523,7 +529,7 @@ console.log('\n5. Concurrent writers and deleted files')
     await focusEnd(page)
     await page.keyboard.type('AFTER_DELETE')
     await page.waitForTimeout(250)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(1000)
     const recreated = await fs.readFile(docPath('gone.md'), 'utf8').catch(() => '')
     check('saving recreates the deleted file with the text intact', recreated.includes('AFTER_DELETE'), recreated.slice(0, 44).replace(/\n/g, '\\n'))
@@ -562,7 +568,11 @@ console.log('\n6. Local asset protocol')
     // webPreferences.spellcheck is what turns the engine on for the window, and
     // Electron does not expose it at runtime, so this reads the shipped bundle:
     // the preference must not claim "on" while the engine is disabled.
-    const asar = await fs.readFile(join(appPath, 'Contents/Resources/app.asar'))
+    const asarPath =
+      process.platform === 'darwin'
+        ? join(appPath, 'Contents/Resources/app.asar')
+        : join(appPath, 'resources/app.asar')
+    const asar = await fs.readFile(asarPath)
     check(
       'the packaged main process enables the spell checker engine',
       asar.includes('spellcheck: true'),
@@ -573,7 +583,7 @@ console.log('\n6. Local asset protocol')
     const domOn = await page.evaluate(() => document.querySelector('.cm-content')?.getAttribute('spellcheck'))
     check('the default preference turns spell check on in the editor', domOn === 'true', String(domOn))
 
-    await page.keyboard.press('Meta+,')
+    await page.keyboard.press('ControlOrMeta+,')
     await page.waitForTimeout(600)
     const box = page.locator('.dialog .row', { hasText: 'Spell check' }).locator('input[type=checkbox]').first()
     if (await box.count()) {
@@ -632,5 +642,7 @@ console.log(`\n${results.length - failed.length}/${results.length} checks passed
 if (failed.length) {
   console.log('\nFailures:')
   for (const f of failed) console.log(` - ${f.name} ${f.detail}`)
-  process.exitCode = 1
 }
+// Every app instance has been closed above; exit explicitly so a lingering child
+// process handle cannot hang the run after the results are printed.
+process.exit(failed.length ? 1 : 0)

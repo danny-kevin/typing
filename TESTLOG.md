@@ -255,32 +255,79 @@ Environment: macOS 26.6 (arm64) build host, Electron 45.2.3, Node 26.4.0. **No
 Windows machine was available.** Everything below was run on the Mac; the Windows
 artefact was verified by inspection, not by launching it.
 
-### 9.1 Unit tests — `npm test`
+### 9.1 The Windows branch is rebased onto the data-safety work
+
+`main` gained the data-safety merge (`d2b5be9`, `388fbac`, `9cfb527`) while this
+branch was being written: the unified unsaved-work guard, content-hash save
+checks, `src/main/save-doc.ts`, the realpath asset protocol, the tighter CSP and
+`test/smoke/datasafety.mjs`. This branch was rebased onto it before this run, and
+where the two overlapped the **data-safety version was kept**:
+
+- `src/shared/doc.ts` is main's exact per-line model (`DecodedDoc.lineEndings`,
+  `remapLineEndings`, lone-CR support), not the per-file `eolExceptions` model this
+  branch originally carried. That model is strictly stronger: it never shifts an
+  ending by line position, it handles lone CR, and it is what `save-doc.ts` writes.
+- The overlapping line-ending unit tests were dropped in favour of main's larger
+  set (53 cases, including mixed CRLF/LF files, BOM, lone CR, inserted lines, and
+  the `remapLineEndings` helpers), and the README paragraph that documented the old
+  model's limitation was removed because the limitation no longer exists.
+- The save path is main's `writeDocument`; the Windows-specific addition on top is
+  a retry-then-write-in-place fallback around the final rename (Windows refuses to
+  replace a file another process holds open) and the POSIX-only chmod.
+- Everything else of this branch sits on top unchanged: cross-platform paths,
+  `Ctrl` accelerators and the Windows menu, window chrome, `typing-asset:` URL
+  decoding with case-insensitive containment, argv/"open with" handling, the IME
+  guard, the icon and the packaging.
+
+### 9.2 Unit tests — `npm test` (rebased tree)
 
 ```
-Test Files  8 passed (8)
-Tests       156 passed (156)
+Test Files  9 passed (9)
+Tests       179 passed (179)
 ```
 
-| Suite | Tests | What is new in this run |
+| Suite | Tests | What it covers |
 | --- | --- | --- |
-| `test/unit/fidelity.test.ts` | 49 | CRLF round trip, CRLF after an edit, CRLF + UTF-8 BOM, mixed CRLF/LF files (both dominant styles), mixed file with no trailing newline, edit inside a mixed file, a line added to a CRLF file, stale exception indices; plus the CRLF form of every corpus document |
-| `test/unit/paths.test.ts` | 11 | drive letters, UNC shares, mixed separators, `..` collapsing on both platforms, case-insensitive containment, no prefix confusion (`notes` vs `notes2`), relative image links, `~` shortening |
+| `test/unit/fidelity.test.ts` | 53 | main's per-line ending model: every corpus file as LF and as CRLF, BOM (with and without CRLF), mixed CRLF/LF files, lone CR, no trailing newline, edit in place, inserted lines, `remapLineEndings`, line-ending helpers |
+| `test/unit/save-safety.test.ts` | 18 | main's write path: content-hash conflict detection, conflict copies, invalid UTF-8 refusal, a concurrent write inside the save window, deleted-file recreation |
+| `test/unit/markdown.test.ts` | 31 | unchanged plus main's additions |
+| `test/unit/inline.test.ts` | 14 | unchanged |
+| `test/unit/paths.test.ts` | 11 | Windows paths: drive letters, UNC shares, mixed separators, `..` collapsing on both platforms, case-insensitive containment, no prefix confusion (`notes` vs `notes2`), relative image links, `~` shortening |
 | `test/unit/assets.test.ts` | 15 | `typing-asset:` URL resolution against Windows folders (drive letters mistaken for schemes, spaces, CJK names, backslashes), remote/protocol-relative refusal, data URLs, round trip back to a path |
 | `test/unit/commands.test.ts` | 16 | `Ctrl` bindings on Windows vs `⌘` on macOS, `Ctrl+Alt` and punctuation commands, IME composition guarding, `CmdOrCtrl` menu accelerators, `⇧⌘S` vs `Ctrl+Shift+S` rendering |
-| `test/unit/menu.test.ts` | 9 | macOS template (application menu, Window menu, no `&`), Windows template (File/Edit/View/Format/Table/Help, Alt mnemonics, no macOS-only roles, Exit in File, About in Help, no duplicate keys) |
+| `test/unit/menu.test.ts` | 9 | macOS template (application menu, Window menu, no `&`), Windows template (File/Edit/View/Format/Table/Help, Alt mnemonics, no macOS-only roles, Preferences and Exit in File, About in Help, no duplicate keys) |
 | `test/unit/startup.test.ts` | 12 | argv parsing: macOS launch, Windows drive paths, quoted paths, forward slashes, UNC, relative paths, Chromium switches, forwarded executable, last-argument-wins, unreadable arguments |
-| `test/unit/markdown.test.ts` | 30 | unchanged |
-| `test/unit/inline.test.ts` | 14 | unchanged |
 
-### 9.2 macOS regression suites (unchanged behaviour) — all pass
+### 9.3 macOS regression suites (rebased tree) — all pass
 
 ```
-npm run smoke         14/14 checks passed
+npm run smoke          14/14 checks passed
 npm run smoke:features 28/28 checks passed
-npm run smoke:caret   27/27 checks passed
-npm run typecheck     clean
+npm run smoke:caret    27/27 checks passed
+npm run smoke:datasafety 63/63 checks passed
+npm run typecheck      clean
 ```
+
+These ran against `release/mac-arm64/Typing.app` rebuilt from this branch,
+including the byte-identical open+save check for all 10 corpus files, CRLF and BOM
+editing, Chinese IME composition, image paste, external-change conflict copies,
+HTML/PDF export, the data-safety suite (unsaved-work guard on every document
+switch, conflict handling, invalid UTF-8, deleted files, CSP, the asset protocol)
+and the caret/pointer alignment suite. Runtime: smoke ≈7 s, features ≈31 s,
+caret ≈67 s, datasafety ≈100 s.
+
+The end-to-end suites end with an explicit `process.exit()` after printing their
+results: one caret run printed `27/27 checks passed` and then hung until the
+harness timeout, because a child app process the suite had already closed was
+still holding the event loop open. Same checks, no hang, honest exit code.
+
+The macOS build also caught a real regression during this run: the preload bridge
+used to drop `typing:event` messages that arrived before the renderer had
+registered a listener, so an initial document passed on the command line could be
+lost (the smoke test failed on "sample file opens"). The bridge now buffers events
+and replays them to the first listener; the suite passes again. This was a latent
+race that only showed up because the renderer's boot gained an extra IPC round
+trip.
 
 These ran against `release/mac-arm64/Typing.app` rebuilt from this branch,
 including the byte-identical open+save check for all 10 corpus files, CRLF and BOM
@@ -301,7 +348,7 @@ and replays them to the first listener; the suite passes again. This was a laten
 race that only showed up because the renderer's boot gained an extra IPC round
 trip.
 
-### 9.3 Windows package — `npm run package:win`
+### 9.4 Windows package — `npm run package:win`
 
 Built on the Mac, no wine, no Windows machine, no signing certificate:
 
@@ -314,7 +361,7 @@ release/win-unpacked/                              372 MB
 release/Typing-0.1.0-win-x64.zip                   156.7 MB
 ```
 
-### 9.4 Windows package verification — `npm run verify:win`
+### 9.5 Windows package verification — `npm run verify:win`
 
 ```
 46/46 checks passed
@@ -341,7 +388,7 @@ What it checked, from `scripts/check-win-package.mjs`:
   `Typing.exe` and `resources/app.asar` at the root; every entry was extracted and
   its CRC32 compared; `unzip -t` also reports no errors.
 
-### 9.5 What is verified only by unit test or inspection (not by running on Windows)
+### 9.6 What is verified only by unit test or inspection (not by running on Windows)
 
 Verified by unit test only (pure logic, exercised on the Mac):
 
@@ -354,8 +401,8 @@ Verified by unit test only (pure logic, exercised on the Mac):
   containment, forward-slash markdown links, `~` shortening;
 - argv/「open with」 parsing for Windows command lines;
 - asset URL resolution for `C:\…` document folders;
-- line-ending fidelity for CRLF, BOM and mixed files (this is platform-independent
-  and the same code path the app uses on both platforms).
+- line-ending fidelity for CRLF, BOM, mixed and lone-CR files (platform-independent:
+  the same decode/encode and `save-doc.ts` path runs on both platforms);
 
 Verified by inspection of the artefact only:
 
@@ -378,13 +425,14 @@ Not verified at all (no Windows machine):
   guarded and the macOS IME test passes, but the Windows IME paths differ);
 - "Open with", drag-and-drop of a file from Explorer, and jump-list/recent
   documents;
-- file writes over a file locked by another program (the retry + in-place
-  fallback in `atomicWrite` is untested on Windows);
+- file writes over a file locked by another program (the retry + write-in-place
+  fallback around the rename in `src/main/save-doc.ts` only triggers on Windows
+  `EPERM`/`EBUSY`/`EACCES`, so it cannot be exercised here);
 - external-change detection with Windows file timestamps;
 - HTML/PDF export through the Windows print engine;
 - notifications through the Windows action centre.
 
-### 9.6 Manual checklist for a Windows machine
+### 9.7 Manual checklist for a Windows machine
 
 After unzipping `Typing-win-x64.zip` and starting `Typing.exe` (SmartScreen: More
 info → Run anyway):
