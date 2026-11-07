@@ -34,6 +34,43 @@ while open and destroyed on close. A measured 1,080,890-byte document switched i
 cycles showed a renderer-heap plateau after warm-up. See [TESTLOG.md](TESTLOG.md)
 for the measurements, methodology and limits.
 
+## Local version history
+
+**File ▸ Local History…** (`⇧⌘H` / `Ctrl+Shift+H`, or the clock button) opens
+history for the active tab. Browse dated snapshots, read their source, compare a
+local line diff against the current editor, restore with Undo/Redo, or copy a
+snapshot into a new Untitled tab. Restore preserves UTF-8 BOM and every line's
+LF/CRLF/lone-CR ending, including mixed files. A changed/deleted or invalid-UTF-8
+file blocks Restore rather than weakening the existing save protections; copying
+into a new tab remains available.
+
+History is on by default. It captures successful saved bytes at most once per
+minute per document (rapid saves are skipped, not deferred; identical newest
+bytes are deduplicated). Reload, Revert and Restore also snapshot the editor text
+they are about to replace, without the time throttle. Normal typing is not
+version history; crash recovery remains separate.
+
+Defaults: **100 snapshots/document, 90 days, 200 MiB overall, files up to 5 MiB**.
+The newest snapshot of each document is never pruned, so protected newest entries
+can exceed the global budget. **Preferences ▸ Local history settings…**, or the
+sheet's **Storage, privacy and limits**, exposes the limits, global/per-document
+switches and confirmed clear actions. Turning history off preserves old snapshots.
+
+The store lives **only under Electron's local user-data directory**:
+`~/Library/Application Support/Typing/history` on macOS, and
+`%APPDATA%\Typing\history` on Windows (the sheet shows the actual path).
+There is no history folder beside a document and no network service. Atomic
+manifests and gzip-compressed, content-addressed 64 KiB chunks bound duplication;
+history failures are logged and cannot fail a document save. Paths are canonical:
+symlink aliases share history, while rename/move/Save As starts separate history.
+History contains unencrypted private copies; do not relocate user data into a
+synced/network folder. See [USAGE.md](USAGE.md) for details and privacy caveats.
+
+Measured on the packaged macOS app: 1 MiB save IPC round-trip medians were
+31.62 ms off / 32.66 ms on (+1.04 ms median); a 240-snapshot sheet
+opened in 15.53 ms median, 19.60 ms maximum. These are local synthetic checks,
+not Windows runtime measurements; see [TESTLOG.md](TESTLOG.md).
+
 ## Run the built app
 
 ### macOS
@@ -98,6 +135,7 @@ Electron reports, `%APPDATA%\Typing` by default):
 | `preferences.json` | theme, fonts, autosave and view settings |
 | `recent-files.json` | File ▸ Recent Files |
 | `recovery\*.json` | crash-recovery drafts of unsaved work |
+| `history\index.json`, `history\blobs\*` | local version history, limits and document opt-outs |
 
 ### Development
 
@@ -110,19 +148,20 @@ npm run smoke:features
 npm run smoke:caret      # pointer/caret alignment on the packaged app
 npm run smoke:datasafety # unsaved-work guard, conflicts, CSP, asset protocol
 npm run smoke:tabs       # tabs, independent undo, crash recovery, 50-cycle stress
+npm run smoke:history    # local snapshots, diff, undoable restore, privacy, caps, latency
 npm run build      # compile main, preload and renderer into out/
 npm run verify:win # inspect release/win-unpacked and the zip
 ```
 
-The five end-to-end suites launch the packaged app. They choose the binary from
-the platform (`release/mac-arm64/Typing.app/Contents/MacOS/Typing` on macOS,
-`release/win-unpacked/Typing.exe` on Windows) and use `ControlOrMeta` shortcuts,
-so `npm run smoke`, `npm run smoke:features`, `npm run smoke:caret` and
-`npm run smoke:datasafety` and `npm run smoke:tabs` target Windows after
-`npm run package:win` too (not run on Windows in this delivery; symlink checks
-require Windows Developer Mode or permission to create symlinks).
-Override the target with
-`TYPING_APP=<directory>` if the build lives somewhere else.
+The six end-to-end suites launch the packaged app and use `ControlOrMeta`
+shortcuts. The default binary is
+`release/mac-arm64/Typing.app/Contents/MacOS/Typing` on macOS, and
+`release/win-unpacked/Typing.exe` on Windows; for the existing tabs suite on
+Windows explicitly set `TYPING_APP=release/win-unpacked`. Override any suite's
+target with `TYPING_APP=<directory>` or `TYPING_EXE=<full executable path>`.
+After `npm run package:win`, these tests can target Windows too, but **none has
+been run on Windows in this delivery**. Symlink checks require Windows Developer
+Mode or permission to create symlinks.
 
 Node 26 is what this repository was built with; any current LTS Node works. The
 project does not modify the system Node or install global packages.

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const bundle = process.env.TYPING_APP ?? process.argv[2] ?? join(root, 'release/mac-arm64/Typing.app')
+const bundle = process.env.TYPING_APP ?? process.argv[2] ?? join(root, 'release', process.platform === 'darwin' ? 'mac-arm64/Typing.app' : 'win-unpacked')
 const executablePath = process.env.TYPING_EXE ?? join(bundle, process.platform === 'darwin' ? 'Contents/MacOS/Typing' : 'Typing.exe')
 const work = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'typing-history-smoke-')))
 const userData = join(work, 'user-data'), docs = join(work, 'documents')
@@ -216,7 +216,7 @@ try {
   check('confirmed clear-all deletes snapshots and blobs but not documents', (await list(page)).snapshots.length === 0 && (await list(page, other)).snapshots.length === 0 && (await fs.readdir(join(userData, 'history', 'blobs'))).length === 0 && (await fs.readFile(other, 'utf8')).includes('DOCUMENT OFF'))
   await closePanel(page)
   await call(page, 'history.configure', { enabled: true }); await seed(page, other, 'Light preview\n'); await panel(page)
-  await page.waitForFunction(() => document.querySelector('#toast').classList.contains('hidden'), null, { timeout: 8000 })
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#toast')).opacity === '0', null, { timeout: 8000 })
   check('history sheet and Close action fit the window', await page.locator('.history-sheet').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight))
   await page.screenshot({ path: join(work, 'history-light.png') })
   await closePanel(page)

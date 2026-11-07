@@ -1,5 +1,125 @@
 # Test log
 
+## Local version history — 2026-11-07
+
+Environment: macOS 26.6.2 (25G83), arm64; Node 26.4.0; Electron 45.2.3.
+Runtime code is validated on the local history branch; final delivery rebuilds
+include these documentation updates. Save integration and the packaged history
+suite are followed by an additional store failure-cleanup regression.
+
+| Command | Actual result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm run test:unit` | 14 suites, 220 tests pass |
+| `npm run package` | macOS arm64 app built and ad-hoc signed |
+| `npm run smoke:history` | 57/57 packaged checks, zero renderer exceptions |
+| `npm run smoke` | 14/14 |
+| `npm run smoke:features` | 28/28 |
+| `npm run smoke:caret` | 27/27 |
+| `npm run smoke:datasafety` | 63/63, including unchanged CSP and blocked local HTTP |
+| `npm run smoke:tabs` | 59/59, including large-document switching and 50 close/discard cycles |
+| `npm run package:win` | Windows x64 zip built; bundled verification 46/46 |
+| `npm run verify:win` | independent archive/PE/ASAR verification 46/46 |
+
+The six packaged suites total 248 checks. No existing packaged suite was changed
+or relaxed. Unit additions cover strict 60-second save throttling, newest-byte
+dedupe, shared compressed chunks, exact byte reads across restart (LF/CRLF/mixed
+endings/BOM), count/age/global pruning, protected newest entries, global/document
+opt-outs, size exclusion, clear and preference persistence, canonical aliases
+and independent renamed paths, atomic manifest failure/recovery, swallowed I/O
+failure, symlink/cloud/network directory rejection, invertible byte provenance,
+and bounded renderer line diff reconstruction.
+
+### Packaged history checks
+
+`test/smoke/history.mjs` launches the real packaged app with isolated temporary
+user-data and documents. It exercises successful saves and strict rapid-save
+throttling; native shortcut/menu command routing; active-tab newest-first listing,
+relative/absolute dates and size; readonly preview and actual line diff; keyboard
+focus containment; pre-restore snapshot of unsaved text; one-edit Undo/Redo; copy
+to a separate dirty Untitled; global and document switches; clear cancellation
+and confirmations; limits pruning; protected latest snapshots; 5 MiB exclusion;
+and a real filesystem failure (`history` is a regular file), without blocking
+or corrupting a save. It verifies byte-identical restore/save and Undo/save for
+LF, CRLF, mixed BOM endings and a content U+FEFF after the BOM. A format-only
+restore is dirty, persisted to recovery, offered after a crash-style app exit,
+and saved byte-identically after recovery. External reload and Revert preserve
+the old editor text; external-change and invalid-UTF-8 states reject Restore.
+Typing during async snapshot I/O cancels stale Restore.
+
+Light/dark screenshots and a 680×560 narrow-window check confirm the sheet/footer
+fits and controls remain reachable. Source and diff are plain text, never rendered
+Markdown. No new npm packages or licence changes; diff is original bounded line
+LCS with a coarse replacement fallback, gzip/hash use Node built-ins. CSP is
+unchanged.
+
+### Measured performance
+
+The packaged history suite alternates global history on/off (12 unique eligible
+paths per condition, order alternated) while writing a **1,048,576-byte UTF-8
+text** through the real `file.save` IPC and atomic document writer. Timing is
+host-side IPC round-trip; queue drain is outside the save timer. Each enabled
+path is new so the snapshot is eligible, rather than measuring only the throttle
+skip path. These are synthetic local measurements, not a screen-recorded latency
+study or Windows timings.
+
+| Metric | Measured |
+| --- | ---: |
+| 1 MiB save, history off, median | 31.62 ms |
+| 1 MiB save, history on, median | 32.66 ms |
+| On minus off, median | +1.04 ms |
+| Remaining history queue drain after save, median | 2.46 ms |
+| Open sheet + list + selected preview/diff, 240 snapshots, 7 repetitions | 15.53 ms median / 19.60 ms max |
+
+Earlier full validations measured −0.45 to +1.01 ms added median save latency
+and 13.3–16.9 ms median opening, consistent with small scheduling variation.
+Snapshots compress asynchronously and history writes are not awaited by Save.
+The shared-chunk unit test stores forty 1 MiB versions with only one changed
+chunk per version, requiring at most 41 unique blobs, rather than forty whole
+uncompressed documents. The cap is compressed payload plus manifest bytes;
+filesystem allocation overhead is not included, and newest-per-path protection
+makes the cap deliberately soft when protected newest versions alone exceed it.
+
+### Regression discoveries and test changes
+
+- New failing packaged regressions reproduced Restore accepting typing during
+  its initial async reads and recovery dropping format-only restored work. Fixed
+  by capturing invocation state before I/O and carrying byte provenance in
+  recovery drafts (including the equal-text recovery filter).
+- Visual review found the existing overlay's 12vh top padding plus a 92vh sheet
+  could put Close below the window. History now uses 4vh padding; normal dialogs
+  are unchanged. Normal and narrow bounds are asserted.
+- The added fidelity unit exposed TextDecoder consuming a second leading
+  U+FEFF after `decodeDoc` had already stripped the real BOM. `ignoreBOM: true`
+  now preserves that content byte sequence. `fidelity.test.ts` and
+  `save-safety.test.ts` gained assertions only; no existing expectations changed.
+- Extending the atomic-failure test exposed an unreferenced blob left after a
+  failed manifest publish. Failed transactions now remove blobs absent from the
+  prior committed manifest, and a fresh load cleans unreferenced chunks, preventing
+  repeated publish failures from accumulating whole document chunks.
+- macOS NFS uses VFS type 2, not Linux's filesystem magic. A failing injected
+  statfs test led to fail-closed APFS/HFS history storage on macOS. Windows UNC
+  and recognized cloud/network roots are refused too; arbitrary external sync
+  programs cannot be detected universally.
+
+### Delivery and Windows limits
+
+Both packages are rebuilt with these docs and copied to
+`/Users/danny/Projects/typing-build/Typing.app` and
+`/Users/danny/Projects/typing-build/Typing-win-x64.zip`. The macOS bundle is
+ad-hoc signed for local use, not notarized. Windows PE headers, runtime files,
+ASAR layout, icon resources, zip extraction and every entry CRC verify; **the
+Windows app has not been run on Windows**. On a Windows machine run
+`npm run smoke:history` after packaging (or set `TYPING_EXE` to `Typing.exe`),
+then manually check Ctrl+Shift+H, native list keyboard navigation, dark/light,
+local `%APPDATA%\Typing\history`, restores with CRLF/BOM, opt-outs and both
+clear confirmations. Existing Windows smoke symlink checks may require Developer
+Mode or symlink permission. No pushes, remotes, publishing or system app installs.
+
+Evidence logs, raw performance samples and screenshots are retained outside the
+worktree at `/Users/danny/Projects/firstmate/data/typing-history-h5/`; the final
+verified history fixture is `/private/var/folders/m1/pn9y08j56xvg9nd_vm67lyq00000gp/T/typing-history-smoke-sVWpWS`.
+
 ## Document tabs — 2026-11-07
 
 Environment: macOS 26.6.2 (25G83), arm64; Node 26.4.0; packaged Electron

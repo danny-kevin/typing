@@ -22,6 +22,7 @@ The [Windows shortcut table](#windows-shortcuts) at the end lists them all.
 | Save | `⌘S` (`Ctrl+S`) |
 | Save as | `⇧⌘S` (`Ctrl+Shift+S`) |
 | Revert to saved | File ▸ Revert to Saved |
+| Local version history | File ▸ Local History…, `⇧⌘H` (`Ctrl+Shift+H`), or the clock button |
 | Open from the command line | `Typing.exe "C:\path\to\note.md"` (also accepts a folder) |
 
 Saving is quiet: if the bytes on disk already match the document, nothing is
@@ -87,6 +88,102 @@ tab shows its own banner. Reload/Revert affects only that document.
 Existing heading shortcuts `⌘1…6` / `Ctrl+1…6` are unchanged. With keyboard focus
 on a tab, Left/Right, Home/End navigate; Delete closes; Alt+Shift+Left/Right
 reorders it. File and View menus expose the tab commands too.
+
+## Local version history
+
+Open **File ▸ Local History…**, press **⇧⌘H** (**Ctrl+Shift+H** on Windows), or
+click the clock button. The sheet belongs to the active document tab. The list
+is newest first and shows relative time, absolute local time and byte size; its
+hover text includes UTC and exact byte size. Select with the mouse or the arrow
+keys, Tab between controls, and use Escape or Close to return to writing.
+
+- **Preview** is read-only source, not executed/rendered Markdown.
+- **Line diff** compares the selected snapshot with the current editor, including
+  unsaved edits: `−` means removed from the snapshot, `+` added in the editor.
+  Large unrelated changes use a non-minimal replacement instead of expensive
+  quadratic comparison. Display is limited to 1,000 changed/context lines total,
+  and 200,000 characters per block; preview and restored text are complete.
+- **Restore** replaces this tab's text as one undoable edit, taking a pre-restore
+  snapshot first. Undo/Redo carries BOM and line endings along with the text.
+  Restore does not write directly to disk: normal autosave/manual Save applies.
+  If autosave is enabled it may save the restored text shortly afterward.
+- **Copy snapshot to a new tab** leaves the original alone and creates an Untitled
+  copy. Save As chooses its destination.
+
+Restore is blocked if the original has an external change, has been deleted, or
+is not valid UTF-8, or if the snapshot itself contains invalid UTF-8. The sheet
+explains the block and offers Copy instead (invalid UTF-8 can only be copied as
+decoded replacement text). Typing rechecks disk hashes before applying Restore;
+normal conflict-copy and invalid-UTF-8 save protections still apply. Typing while
+a restore is reading cancels that stale restore rather than overwriting new input.
+
+### What is captured
+
+History is **on by default**, for saved paths only. A successful save (including
+autosave or an unchanged Save) is eligible to snapshot its exact saved bytes.
+Identical newest content is skipped. Different ordinary saves are limited to
+**one snapshot per document per 60 seconds**; rapid saves are skipped, not held
+in a timer or deferred. The next eligible save after that minute creates the
+next version. History is not a record of every keystroke or every autosave.
+
+Immediately before an external-change reload, Revert, or Restore replaces the
+editor text, that text is also eligible for a snapshot, bypassing the minute
+throttle (identical newest bytes still deduplicate). These are the only history
+captures of unsaved in-memory text. Crash-recovery drafts remain a separate
+mechanism and are **not** disabled when version history is switched off.
+
+### Limits and switches
+
+Open **Preferences ▸ Local history settings…** (on Windows, **File ▸
+Preferences…**), or expand **Storage, privacy and limits** in the history sheet.
+
+| Default | Rule |
+| --- | --- |
+| 100 snapshots per document | oldest removed first |
+| 90 days | older versions removed, except the newest |
+| 200 MiB overall | compressed chunk bytes plus the manifest; oldest eligible versions removed first |
+| 5 MiB maximum file | larger saved/encoded content is excluded automatically |
+
+The newest snapshot of **every** document is always retained, even if older than
+90 days or if the combined newest snapshots exceed the global cap. The sheet
+reports that protected over-budget state. Apply limits prunes immediately; normal
+captures and history listing also enforce age/count/storage retention. Shared,
+compressed 64 KiB chunks avoid repeatedly storing unchanged parts of long files.
+
+Use **Enable local history** for the global switch and **History for this
+document** for the current canonical path. Switching off stops new snapshots but
+does not delete old ones. **Clear history for this document** and **Clear all
+history** both ask for confirmation. Clearing deletes snapshots and unreferenced
+content chunks, not the document files, recovery drafts, limits or document
+opt-outs. It is not secure disk erasure and does not remove OS backups.
+
+### Location and privacy
+
+Everything stays inside the app's local **user-data/history** directory. There
+are no history files beside your Markdown files, no account, upload or network
+service. The sheet shows the exact directory; defaults are:
+
+- macOS: `~/Library/Application Support/Typing/history`
+- Windows: `%APPDATA%\Typing\history` (normally
+  `C:\Users\<you>\AppData\Roaming\Typing\history`, on a local disk)
+
+`index.json` holds timestamps, original paths, settings and snapshot references;
+`blobs/` contains gzip-compressed, content-addressed bytes. These are **unencrypted
+private copies of your writing**, protected only by your local account/filesystem.
+The UI cannot relocate the store. Do not relocate Electron's user-data directory
+into a synced or network folder. Known cloud roots, symlinked history directories
+and detected network filesystems are refused; macOS history requires normal local
+APFS/HFS storage. Custom sync tools/backups outside Typing's control cannot be
+detected universally. If history storage is unavailable, it is logged and the
+sheet reports it; **document saves still succeed**.
+
+Identity is the canonical path (case-insensitive on Windows). Symlink aliases
+share a history. Renaming/moving a file, or Save As to a different path, starts
+separate history; no content-hash fallback attaches another file's private
+history. Old-path history remains retained until its limits/clear action remove
+it, and is available if a document is reopened at that old path. The latest entry
+of even an old path is protected by the newest-per-document rule; Clear all
+history removes these orphaned-path snapshots too.
 
 ## Writing
 
@@ -165,7 +262,8 @@ follows the cursor and jumps when clicked.
 ## Preferences (`⌘,`)
 
 Theme (follow system / light / dark), editor font family and size, editor width,
-line height, autosave, auto-pairing, smart paste, spell check.
+line height, autosave, auto-pairing, smart paste, spell check, and Local history
+settings (privacy, global/document switches, retention limits and clear actions).
 
 ## Recovery
 
@@ -189,6 +287,7 @@ New tab ⌘T / ⌘N · Close tab ⌘W · Close window ⇧⌘W
 Next/previous tab Ctrl+Tab / Ctrl+Shift+Tab or ⇧⌘] / ⇧⌘[
 Tab 1–8 ⌥⌘1…8 · Last tab ⌥⌘9
 Open ⌘O · Open folder ⇧⌥⌘O · Quick open ⇧⌘O · Save ⌘S · Save as ⇧⌘S
+Local History ⇧⌘H
 Source mode ⌘/ · Outline ⇧⌘1 · Sidebar ⇧⌘2 · Focus F8 · Typewriter F9
 Find ⌘F · Replace ⌥⌘F · Next ⌘G · Previous ⇧⌘G
 Bold ⌘B · Italic ⌘I · Strikethrough ⇧⌘X · Inline code ⌘E · Link ⌘K · Image ⇧⌘I
@@ -209,7 +308,7 @@ New tab Ctrl+T / Ctrl+N · Close tab Ctrl+W · Close window Ctrl+Shift+W
 Next/previous tab Ctrl+Tab / Ctrl+Shift+Tab or Ctrl+PageDown / Ctrl+PageUp
 Tab 1–8 Ctrl+Alt+1…8 · Last tab Ctrl+Alt+9
 Open Ctrl+O · Open folder Ctrl+Alt+Shift+O · Quick open Ctrl+Shift+O
-Save Ctrl+S · Save as Ctrl+Shift+S
+Save Ctrl+S · Save as Ctrl+Shift+S · Local History Ctrl+Shift+H
 Source mode Ctrl+/ · Outline Ctrl+Shift+1 · Sidebar Ctrl+Shift+2 · Focus F8 · Typewriter F9
 Find Ctrl+F · Replace Ctrl+Alt+F · Next Ctrl+G · Previous Ctrl+Shift+G
 Bold Ctrl+B · Italic Ctrl+I · Strikethrough Ctrl+Shift+X · Inline code Ctrl+E
