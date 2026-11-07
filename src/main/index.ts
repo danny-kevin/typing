@@ -1,16 +1,24 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell, protocol, net, nativeTheme, clipboard, Notification } from 'electron'
 import { join, dirname, basename, resolve, relative, sep } from 'node:path'
 import { createHash } from 'node:crypto'
-import { promises as fs, watchFile, unwatchFile, existsSync } from 'node:fs'
+import { promises as fs, watchFile, unwatchFile, existsSync, statSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { decodeDoc } from '../shared/doc'
 import { writeDocument, hashBytes, type SaveRequest } from './save-doc'
+import { isInsidePath } from '../shared/paths'
+import { pathFromAssetUrl } from '../shared/assets'
 import { DEFAULT_PREFS, type Prefs, type DirEntry, type RecentFile } from '../shared/types'
 import { buildMenu } from './menu'
+import { fileFromArgv } from './startup'
 
 const isDev = !app.isPackaged
+const isMac = process.platform === 'darwin'
 const ASSET_SCHEME = 'typing-asset'
+
+// Windows needs an explicit AppUserModelID for notifications and for grouping the
+// taskbar entry; it must match the appId in package.json.
+if (process.platform === 'win32') app.setAppUserModelId('dev.danny.typing')
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -163,7 +171,10 @@ const handlers: Record<string, Handler> = {
       version: app.getVersion(),
       electron: process.versions.electron,
       chrome: process.versions.chrome,
-      node: process.versions.node
+      node: process.versions.node,
+      platform: process.platform,
+      home: app.getPath('home'),
+      userData: app.getPath('userData')
     }
   },
   async 'prefs.get'() {
@@ -262,8 +273,10 @@ const handlers: Record<string, Handler> = {
         if (out.length >= max) return
         if (e.name.startsWith('.') || e.name === 'node_modules') continue
         const full = join(dir, e.name)
+        // Relative paths always use forward slashes: they are document-relative
+        // names for quick open and for markdown links, not OS paths.
         if (e.isDirectory()) await walk(full, depth + 1)
-        else if (/\.(md|markdown|mdown|mkd|mdx|txt)$/i.test(e.name)) out.push(relative(root, full))
+        else if (/\.(md|markdown|mdown|mkd|mdx|txt)$/i.test(e.name)) out.push(relative(root, full).split(sep).join('/'))
       }
     }
     await walk(root, 0)
@@ -287,12 +300,14 @@ const handlers: Record<string, Handler> = {
   async 'window.setTitle'([title, filePath]) {
     if (!mainWindow) return false
     mainWindow.setTitle(String(title))
-    mainWindow.setDocumentEdited(Boolean(title && title.startsWith('•')))
-    if (filePath) mainWindow.setRepresentedFilename(String(filePath))
+    if (isMac) {
+      mainWindow.setDocumentEdited(Boolean(title && title.startsWith('•')))
+      if (filePath) mainWindow.setRepresentedFilename(String(filePath))
+    }
     return true
   },
   async 'window.setRepresentedFile'([filePath]) {
-    mainWindow?.setRepresentedFilename(String(filePath))
+    if (isMac) mainWindow?.setRepresentedFilename(String(filePath))
     return true
   },
   async 'window.close'([force]) {
@@ -305,7 +320,9 @@ const handlers: Record<string, Handler> = {
     return true
   },
   async 'window.setDocumentEdited'([edited]) {
-    mainWindow?.setDocumentEdited(Boolean(edited))
+    // Only macOS has the dot in the close button; the title marker works on all
+    // platforms and is set from the renderer.
+    if (isMac) mainWindow?.setDocumentEdited(Boolean(edited))
     return true
   },
   async 'assets.saveImage'([payload]) {
@@ -507,10 +524,11 @@ function createWindow(): void {
     minHeight: 420,
     show: false,
     title: 'Typing',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 16 },
+    // macOS hides the title bar and keeps the traffic lights; Windows and Linux
+    // keep the native frame, caption buttons and menu bar the platform expects.
+    ...(isMac ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 16 } } : {}),
+    autoHideMenuBar: false,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e22' : '#faf9f7',
-    vibrancy: undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -558,7 +576,12 @@ function createWindow(): void {
   mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('typing:event', 'window:fullscreen', false))
 }
 
+// macOS delivers Finder double-clicks and Dock drops here. Windows has no such
+// event: it passes the file on the command line (`Typing.exe C:\a\b.md`, which is
+// what "Open with" and dragging onto the executable produce) and reaches a
+// running instance through `second-instance` below.
 app.on('open-file', (event, path) => {
+  if (!isMac) return
   event.preventDefault()
   if (mainWindow) {
     openPathFromOutside(path)
@@ -571,18 +594,11 @@ app.on('open-file', (event, path) => {
 
 let pendingOpenPath: string | null = null
 
-function fileFromArgv(argv: string[]): string | null {
-  const candidate = argv
-    .slice(1)
-    .reverse()
-    .find((a) => !a.startsWith('-') && existsSync(a) && !a.endsWith('.app'))
-  return candidate ? resolve(candidate) : null
-}
-
-/** A path from the command line or a dock drop: markdown file or folder. */
+/** A path from the command line, an "open with", a dock drop or a drag. */
 function openPathFromOutside(path: string): void {
+  const abs = resolve(path)
   try {
-    if (existsSync(path) && require('node:fs').statSync(path).isDirectory()) {
+    if (existsSync(path) && statSync(path).isDirectory()) {
       void addAssetRoot(path)
       mainWindow?.webContents.send('typing:event', 'folder:open-request', { path: resolve(path) })
       return
@@ -590,7 +606,7 @@ function openPathFromOutside(path: string): void {
   } catch {
     /* fall through to file handling */
   }
-  mainWindow?.webContents.send('typing:event', 'file:open-request', { path })
+  mainWindow?.webContents.send('typing:event', 'file:open-request', { path: abs })
 }
 
 const gotLock = app.requestSingleInstanceLock()
@@ -610,13 +626,14 @@ if (!gotLock) {
     // Serve only files inside folders the user has opened. No remote loading.
     protocol.handle(ASSET_SCHEME, async (request) => {
       try {
-        const url = new URL(request.url)
-        const raw = decodeURIComponent(url.pathname.replace(/^\//, ''))
+        const raw = pathFromAssetUrl(request.url)
         // Resolve both sides through symlinks: a link inside an opened folder
         // must not become a way to read a file outside it.
         const abs = await fs.realpath(resolve(raw)).catch(() => null)
         if (!abs) return new Response('forbidden', { status: 403 })
-        const allowed = [...assetRoots].some((root) => abs === root || abs.startsWith(root + sep))
+        // Containment is case-insensitive on Windows, where `C:\Notes` and
+        // `c:\notes` are the same folder.
+        const allowed = [...assetRoots].some((root) => isInsidePath(root, abs))
         if (!allowed) return new Response('forbidden', { status: 403 })
         const upstream = await net.fetch(pathToFileURL(abs).toString())
         const headers = new Headers(upstream.headers)
@@ -670,10 +687,10 @@ if (!gotLock) {
   })
 
   app.on('before-quit', () => {
-  quitRequested = true
-})
+    quitRequested = true
+  })
 
-app.on('window-all-closed', () => {
+  app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
 }

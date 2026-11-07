@@ -2,7 +2,7 @@
   "name": "typing",
   "productName": "Typing",
   "version": "0.1.0",
-  "description": "Typing - a local-first WYSIWYG markdown editor for macOS",
+  "description": "Typing - a local-first WYSIWYG markdown editor for macOS and Windows",
   "main": "./out/main/index.js",
   "author": "Danny",
   "license": "MIT",
@@ -12,6 +12,8 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "package": "npm run build && electron-builder --mac dir --arm64 && codesign --force --deep --sign - release/mac-arm64/Typing.app",
+    "package:win": "npm run build && electron-builder --win --x64",
+    "verify:win": "node scripts/check-win-package.mjs",
     "test": "vitest run",
     "test:unit": "vitest run",
     "smoke": "node test/smoke/smoke.mjs",
@@ -79,6 +81,18 @@
       "icon": "build/icon.icns",
       "darkModeSupport": true,
       "identity": null
+    },
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Typing-${version}-win-${arch}.${ext}"
     },
     "fileAssociations": [
       {

@@ -23,13 +23,18 @@
   --syntax-property: #2f6f6b;
   --syntax-operator: #7a7368;
   --syntax-punct: #9a938a;
-  --mono-font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --editor-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  /* One stack for both platforms: macOS picks the Apple faces, Windows picks
+     Segoe UI for Latin text and Microsoft YaHei for Chinese, so neither platform
+     falls back to a mismatched serif or a bitmap font. */
+  --mono-font-family: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --editor-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "SF Pro Text",
+    "Helvetica Neue", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Hiragino Sans GB",
+    "Noto Sans CJK SC", sans-serif;
   --editor-font-size: 17px;
   --editor-line-height: 1.75;
   --editor-width: 720px;
-  --ui-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "SF Pro Text",
+    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 }
 
 html.dark {
@@ -104,6 +109,57 @@ button {
   display: flex;
   gap: 2px;
   -webkit-app-region: no-drag;
+}
+
+/* Windows and Linux keep the native window frame and system menu bar, so the
+   in-app strip has no traffic lights to avoid: it becomes a compact toolbar
+   that is still a drag handle. */
+html:not(.platform-mac) #titlebar {
+  flex: 0 0 36px;
+  grid-template-columns: 1fr auto;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+html:not(.platform-mac) #titlebar .titlebar-spacer {
+  display: none;
+}
+
+html:not(.platform-mac) .doc-title {
+  text-align: left;
+  padding-left: 2px;
+}
+
+/* Chromium on Windows draws chunky default scrollbars; keep them subtle but
+   still obviously scrollbars. */
+html:not(.platform-mac) .cm-scroller::-webkit-scrollbar,
+html:not(.platform-mac) .file-tree::-webkit-scrollbar,
+html:not(.platform-mac) .outline-list::-webkit-scrollbar,
+html:not(.platform-mac) .dialog-list::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+html:not(.platform-mac) .cm-scroller::-webkit-scrollbar-thumb,
+html:not(.platform-mac) .file-tree::-webkit-scrollbar-thumb,
+html:not(.platform-mac) .outline-list::-webkit-scrollbar-thumb,
+html:not(.platform-mac) .dialog-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+}
+
+html:not(.platform-mac) .cm-scroller::-webkit-scrollbar-thumb:hover,
+html:not(.platform-mac) .file-tree::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+
+html:not(.platform-mac) .cm-scroller::-webkit-scrollbar-track,
+html:not(.platform-mac) .file-tree::-webkit-scrollbar-track,
+html:not(.platform-mac) .outline-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .doc-title {

@@ -18,7 +18,7 @@ body {
   margin: 0 auto;
   padding: 56px 48px 96px;
   max-width: 46rem;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
   font-size: 16px;
   line-height: 1.72;
   color: #24211d;
@@ -36,7 +36,7 @@ blockquote { margin: 1em 0; padding: 0.1em 0 0.1em 1em; border-left: 3px solid #
 ul, ol { padding-left: 1.45em; margin: 0.7em 0; }
 li { margin: 0.25em 0; }
 li > input[type=checkbox] { margin-right: 0.35em; accent-color: #2f6f6b; }
-code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.89em; background: #f1eee8; padding: 0.12em 0.32em; border-radius: 4px; }
+code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; font-size: 0.89em; background: #f1eee8; padding: 0.12em 0.32em; border-radius: 4px; }
 pre { background: #f4f1eb; border-radius: 8px; padding: 14px 16px; overflow-x: auto; line-height: 1.55; }
 pre code { background: none; padding: 0; font-size: 0.86em; }
 img { max-width: 100%; height: auto; border-radius: 6px; }

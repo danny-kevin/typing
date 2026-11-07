@@ -2,40 +2,22 @@ import { WidgetType, EditorView } from '@codemirror/view'
 import katex from 'katex'
 import mermaid from 'mermaid'
 import type { TableModel } from '../../../shared/markdown'
+import { dirName } from '../../../shared/paths'
+import { resolveAssetTarget } from '../../../shared/assets'
 
 /** The directory of the open document, used to resolve relative asset links. */
 export const docContext = { dir: '' as string, path: '' as string }
 
 export function setDocContext(path: string): void {
   docContext.path = path
-  docContext.dir = path ? path.replace(/\/[^/]*$/, '') : ''
-}
-
-function normalizePath(p: string): string {
-  const parts = p.split('/')
-  const out: string[] = []
-  for (const part of parts) {
-    if (part === '' || part === '.') continue
-    if (part === '..') out.pop()
-    else out.push(part)
-  }
-  return '/' + out.join('/')
+  // `dirName` understands POSIX and Windows separators, so `C:\Notes\a.md`
+  // resolves its images next to the document instead of at the drive root.
+  docContext.dir = path ? dirName(path) : ''
 }
 
 /** Resolve a markdown image/link target to a URL the renderer may load. */
 export function resolveAssetUrl(url: string): string | null {
-  const u = url.trim()
-  if (!u) return null
-  if (/^data:image\//i.test(u)) return u
-  if (/^https?:/i.test(u)) return null // no remote loading, by design
-  if (/^[a-z]+:/i.test(u) && !u.startsWith('file:')) return null
-  if (u.startsWith('#')) return null
-  let abs: string
-  if (u.startsWith('file://')) abs = decodeURI(u.slice('file://'.length))
-  else if (u.startsWith('/')) abs = normalizePath(u)
-  else if (docContext.dir) abs = normalizePath(docContext.dir + '/' + u)
-  else return null
-  return `typing-asset://asset/${encodeURIComponent(abs)}`
+  return resolveAssetTarget(url, docContext.dir)
 }
 
 // ---------------------------------------------------------------------------

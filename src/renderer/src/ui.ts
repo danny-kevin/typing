@@ -1,7 +1,19 @@
 import type { DirEntry, Prefs, RecentFile } from '../../shared/types'
 import type { OutlineItem } from '../../shared/markdown'
+import { displayAccelerator } from '../../shared/commands'
+import { baseName, dirName, prettyPath } from '../../shared/paths'
 
 const overlay = (): HTMLElement => document.getElementById('overlay') as HTMLElement
+
+/**
+ * The platform this window runs on, read from the preload bridge. It decides how
+ * a shortcut is printed (⌘S on macOS, Ctrl+S on Windows and Linux) and a few
+ * platform-specific words such as "Show in Explorer".
+ */
+export const PLATFORM: string =
+  (window as unknown as { typing?: { platform?: string } }).typing?.platform ?? 'darwin'
+
+export const IS_MAC = PLATFORM === 'darwin'
 
 // ---------------------------------------------------------------------------
 // Toasts
@@ -183,7 +195,7 @@ export class FileTree {
     this.root = dir
     this.expanded = dir ? new Set([dir]) : new Set()
     const label = document.getElementById('sidebar-folder') as HTMLElement
-    label.textContent = dir ? (dir.split('/').pop() || dir) : 'No folder'
+    label.textContent = dir ? baseName(dir) || dir : 'No folder'
     label.title = dir ?? ''
     await this.refresh()
   }
@@ -278,7 +290,12 @@ export function fuzzyScore(query: string, target: string): number {
   return score - t.length * 0.05
 }
 
-export function quickOpenDialog(files: string[], onPick: (path: string) => void): void {
+export function quickOpenDialog(
+  files: string[],
+  onPick: (path: string) => void,
+  home: string | null = null,
+  platform = PLATFORM
+): void {
   const host = overlay()
   host.textContent = ''
   const dialog = document.createElement('div')
@@ -310,7 +327,7 @@ export function quickOpenDialog(files: string[], onPick: (path: string) => void)
     if (!filtered.length) {
       const empty = document.createElement('div')
       empty.className = 'quick-item'
-      empty.textContent = files.length ? 'No match' : 'Open a folder first (⌘⇧⌥O)'
+      empty.textContent = files.length ? 'No match' : `Open a folder first (${displayAccelerator('doc.openFolder', platform)})`
       results.appendChild(empty)
       return
     }
@@ -319,10 +336,10 @@ export function quickOpenDialog(files: string[], onPick: (path: string) => void)
       el.className = `quick-item${i === active ? ' active' : ''}`
       el.setAttribute('role', 'option')
       const name = document.createElement('span')
-      name.textContent = file.split('/').pop() || file
+      name.textContent = baseName(file) || file
       const path = document.createElement('span')
       path.className = 'path'
-      path.textContent = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : ''
+      path.textContent = dirName(file)
       el.append(name, path)
       el.addEventListener('mouseenter', () => {
         active = i
@@ -381,7 +398,11 @@ export function quickOpenDialog(files: string[], onPick: (path: string) => void)
 // Recents
 // ---------------------------------------------------------------------------
 
-export function recentsDialog(items: RecentFile[], onPick: (path: string) => void): void {
+export function recentsDialog(
+  items: RecentFile[],
+  onPick: (path: string) => void,
+  home: string | null = null
+): void {
   openDialog('Recent Files', (body) => {
     const list = document.createElement('div')
     list.className = 'dialog-list'
@@ -397,7 +418,7 @@ export function recentsDialog(items: RecentFile[], onPick: (path: string) => voi
       el.textContent = item.name
       const sub = document.createElement('span')
       sub.className = 'sub'
-      sub.textContent = item.path.replace(/^\/Users\/[^/]+/, '~')
+      sub.textContent = prettyPath(item.path, home)
       el.appendChild(sub)
       el.addEventListener('click', () => {
         overlay().classList.add('hidden')
@@ -495,24 +516,32 @@ export function aboutDialog(info: { version: string; electron: string; chrome: s
   }, [{ label: 'Close', primary: true, onClick: (close) => close() }])
 }
 
-export function shortcutsDialog(): void {
+export function shortcutsDialog(platform: string = PLATFORM): void {
+  const k = (id: string): string => displayAccelerator(id, platform)
+  const many = (...ids: string[]): string => ids.map(k).join(' · ')
+  // Every row is generated from the same accelerator table the menu bar uses, so
+  // this list is correct on macOS and Windows without a second copy of the keys.
   const rows: Array<[string, string]> = [
-    ['New / Open / Save', '⌘N · ⌘O · ⌘S'],
-    ['Save As', '⇧⌘S'],
-    ['Source code mode', '⌘/'],
-    ['Quick open', '⇧⌘O'],
-    ['Open folder', '⇧⌥⌘O'],
-    ['Find / Replace', '⌘F · ⌥⌘F'],
-    ['Bold / Italic / Code', '⌘B · ⌘I · ⌘E'],
-    ['Link / Image', '⌘K · ⇧⌘I'],
-    ['Headings 1–6 / paragraph', '⌘1…⌘6 · ⌘0'],
-    ['Quote / Code block', '⌥⌘Q · ⌥⌘C'],
-    ['Table / Math block', '⌥⌘T · ⌥⌘M'],
-    ['Lists: bullet / ordered / task', '⌥⌘U · ⌥⌘O · ⌥⌘X'],
-    ['Outline / Sidebar', '⇧⌘1 · ⇧⌘2'],
-    ['Focus / Typewriter mode', 'F8 · F9'],
-    ['Export HTML / PDF', '⇧⌘E · ⌥⌘P'],
-    ['Preferences', '⌘,']
+    ['New / Open / Save', many('doc.new', 'doc.open', 'doc.save')],
+    ['Save As', k('doc.saveAs')],
+    ['Source code mode', k('view.source')],
+    ['Quick open', k('nav.quickOpen')],
+    ['Open folder', k('doc.openFolder')],
+    ['Find / Replace', many('find.open', 'find.replace')],
+    ['Find next / previous', many('find.next', 'find.prev')],
+    ['Bold / Italic / Code', many('format.bold', 'format.italic', 'format.code')],
+    ['Link / Image', many('format.link', 'format.image')],
+    ['Headings 1–6 / paragraph', `${k('format.h1')}…${k('format.h6')} · ${k('format.p')}`],
+    ['Quote / Code block', many('format.quote', 'format.codeBlock')],
+    ['Table / Math block', many('format.table', 'format.math')],
+    ['Lists: bullet / ordered / task', many('format.ul', 'format.ol', 'format.task')],
+    ['Indent / outdent', many('format.indent', 'format.outdent')],
+    ['Table row / table column', many('table.addRowBelow', 'table.addColRight')],
+    ['Outline / Sidebar', many('view.outline', 'view.sidebar')],
+    ['Focus / Typewriter mode', many('view.focus', 'view.typewriter')],
+    ['Export HTML / PDF', many('export.html', 'export.pdf')],
+    ['Preferences', k('app.prefs')],
+    ['Close window', k('app.close')]
   ]
   openDialog('Keyboard Shortcuts', (body) => {
     const table = document.createElement('table')

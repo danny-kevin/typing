@@ -26,7 +26,8 @@ import {
 import * as ui from './ui'
 import { buildExportHtml } from './export'
 import { livePreviewOptions } from './editor/live-preview'
-import { commandForEvent } from '../../shared/commands'
+import { commandForEvent, displayAccelerator, isMacPlatform } from '../../shared/commands'
+import { baseName, dirName, joinPath, prettyPath, relativePath, toPosixPath } from '../../shared/paths'
 
 interface Api {
   call: (method: string, ...args: unknown[]) => Promise<any>
@@ -72,6 +73,9 @@ const doc: DocState = {
  * started for one file can never land in (or relabel) another one.
  */
 let docGeneration = 0
+const isMac = isMacPlatform(api.platform)
+/** The user's home directory, for `~`-shortened paths in the status bar. */
+let homeDir: string | null = null
 
 let prefs: Prefs = { ...DEFAULT_PREFS }
 let editor: EditorController
@@ -93,6 +97,16 @@ const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) 
 async function boot(): Promise<void> {
   prefs = await api.call('prefs.get')
   applyThemeClass()
+  document.documentElement.dataset.platform = api.platform
+  document.documentElement.classList.add(`platform-${api.platform}`)
+  document.documentElement.classList.toggle('platform-mac', isMac)
+  try {
+    const info = await api.call('appInfo')
+    homeDir = typeof info?.home === 'string' ? info.home : null
+  } catch {
+    homeDir = null
+  }
+  applyShortcutLabels()
 
   editor = createEditor($('editor-host'), {
     onChange: onDocChange,
@@ -145,6 +159,22 @@ function applyThemeClass(): void {
   const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
   document.documentElement.classList.toggle('dark', dark)
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+}
+
+/** Print this platform's shortcut form into the toolbar tooltips. */
+function applyShortcutLabels(): void {
+  const set = (id: string, base: string, command: string): void => {
+    const el = document.getElementById(id)
+    if (!el) return
+    const keys = displayAccelerator(command, api.platform)
+    el.setAttribute('title', `${base} (${keys})`)
+  }
+  set('btn-source', 'Source code mode', 'view.source')
+  set('btn-outline', 'Outline', 'view.outline')
+  set('btn-sidebar', 'File sidebar', 'view.sidebar')
+  set('find-prev', 'Previous', 'find.prev')
+  set('find-next', 'Next', 'find.next')
+  set('btn-open-folder', 'Open folder', 'doc.openFolder')
 }
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyThemeClass)
@@ -255,7 +285,7 @@ function cancelPendingWrites(): void {
 }
 
 function updateTitle(): void {
-  const name = doc.path ? (doc.path.split('/').pop() ?? 'Untitled') : 'Untitled'
+  const name = doc.path ? baseName(doc.path) : 'Untitled'
   const dirty = isDirty()
   const title = `${dirty ? '• ' : ''}${name} — Typing`
   document.title = title
@@ -268,7 +298,7 @@ function updateStatus(): void {
   const text = editor.getText()
   const stats = countStats(text)
   $('status-words').textContent = `${stats.words} words · ${stats.chars} chars`
-  $('status-left').textContent = doc.path ? doc.path.replace(/^\/Users\/[^/]+/, '~') : 'Not saved yet'
+  $('status-left').textContent = doc.path ? prettyPath(doc.path, homeDir) : 'Not saved yet'
   updateCursorStatus()
   updateSaveChip()
   updateModeChip()
@@ -448,7 +478,7 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
 
   let path = doc.path
   if (!path || saveAs) {
-    const suggested = path ?? (folderRoot ? `${folderRoot}/Untitled.md` : 'Untitled.md')
+    const suggested = path ?? (folderRoot ? joinPath(folderRoot, 'Untitled.md') : 'Untitled.md')
     const picked = await api.call('dialog.saveAs', suggested)
     if (!picked) return false
     path = String(picked)
@@ -509,8 +539,8 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
     await api.call('recovery.clear', path)
     updateTitle()
     updateStatus()
-    ui.showBanner(`The original file changed on disk. Your version was saved as “${result.conflictCopy.split('/').pop()}”.`, [
-      { label: 'Show in Finder', onClick: () => void api.call('shell.showItemInFolder', result.conflictCopy!) },
+    ui.showBanner(`The original file changed on disk. Your version was saved as “${baseName(result.conflictCopy)}”.`, [
+      { label: isMac ? 'Show in Finder' : 'Show in Explorer', onClick: () => void api.call('shell.showItemInFolder', result.conflictCopy!) },
       { label: 'Dismiss', onClick: ui.hideBanner }
     ])
     await refreshFolderFiles()
@@ -990,8 +1020,11 @@ function wireGlobalKeys(): void {
   document.addEventListener(
     'keydown',
     (e) => {
+      // An active IME owns every key: on Windows the composition candidate window
+      // is driven with Enter, arrows and Escape, and stealing those breaks it.
+      if (e.isComposing || e.keyCode === 229) return
       if (!$('overlay').classList.contains('hidden')) return
-      const command = commandForEvent(e, api.platform === 'darwin')
+      const command = commandForEvent(e, isMac)
       if (!command) {
         if (e.key === 'Escape' && !$('findbar').classList.contains('hidden')) closeFind()
         return
@@ -1045,7 +1078,7 @@ async function runCommand(command: string): Promise<void> {
       break
     case 'doc.recent': {
       const items = await api.call('recents.list')
-      ui.recentsDialog(items, (p) => void openFile(p))
+      ui.recentsDialog(items, (p) => void openFile(p), homeDir)
       break
     }
     case 'doc.save':
@@ -1065,7 +1098,7 @@ async function runCommand(command: string): Promise<void> {
         ui.toast('Open a folder first')
         break
       }
-      ui.quickOpenDialog(folderFiles, (rel) => void openFile(`${folderRoot}/${rel}`))
+      ui.quickOpenDialog(folderFiles, (rel) => void openFile(joinPath(folderRoot!, rel)))
       break
     case 'edit.undo':
       editor.undo()
@@ -1248,11 +1281,13 @@ async function showAppDoc(file: string, title: string): Promise<void> {
 async function pickImage(): Promise<void> {
   const path = await api.call('dialog.pickImage')
   if (!path) return
-  const name = String(path).split('/').pop() ?? 'image'
+  const name = baseName(String(path))
   const alt = name.replace(/\.[a-z0-9]+$/i, '')
-  // Prefer a relative link when the image lives next to the document.
-  const dir = doc.path ? doc.path.replace(/\/[^/]*$/, '') : ''
-  const src = dir && String(path).startsWith(`${dir}/`) ? String(path).slice(dir.length + 1) : String(path)
+  // Prefer a relative link when the image lives next to the document; a link
+  // written into the document always uses forward slashes, on every platform.
+  const dir = doc.path ? dirName(doc.path) : ''
+  const relative = dir ? relativePath(dir, String(path)) : null
+  const src = relative ?? toPosixPath(String(path))
   fmt.insertImage(editor.view, alt, src)
 }
 
@@ -1261,13 +1296,13 @@ async function pickImage(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function exportBaseName(): string {
-  const name = doc.path ? (doc.path.split('/').pop() ?? 'document').replace(/\.md$/i, '') : 'Untitled'
+  const name = doc.path ? baseName(doc.path).replace(/\.md$/i, '') : 'Untitled'
   return name
 }
 
 async function exportHtml(): Promise<void> {
   const html = await buildExportHtml(editor.getText(), { title: exportBaseName(), docPath: doc.path })
-  const suggested = doc.path ? doc.path.replace(/\.md$/i, '.html') : `${folderRoot ?? ''}/Untitled.html`
+  const suggested = doc.path ? doc.path.replace(/\.md$/i, '.html') : joinPath(folderRoot ?? '', 'Untitled.html')
   const result = await api.call('export.html', { html, suggestedPath: suggested })
   if (result?.ok) ui.toast('HTML exported')
   else if (result?.error && result.error !== 'canceled') ui.showBanner(`Export failed: ${result.error}`, [{ label: 'Dismiss', onClick: ui.hideBanner }])
@@ -1275,7 +1310,7 @@ async function exportHtml(): Promise<void> {
 
 async function exportPdf(): Promise<void> {
   const html = await buildExportHtml(editor.getText(), { title: exportBaseName(), docPath: doc.path })
-  const suggested = doc.path ? doc.path.replace(/\.md$/i, '.pdf') : `${folderRoot ?? ''}/Untitled.pdf`
+  const suggested = doc.path ? doc.path.replace(/\.md$/i, '.pdf') : joinPath(folderRoot ?? '', 'Untitled.pdf')
   const result = await api.call('export.pdf', { html, suggestedPath: suggested, title: exportBaseName() })
   if (result?.ok) ui.toast('PDF exported')
   else if (result?.error && result.error !== 'canceled') ui.showBanner(`Export failed: ${result.error}`, [{ label: 'Dismiss', onClick: ui.hideBanner }])

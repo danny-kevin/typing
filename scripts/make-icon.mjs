@@ -180,6 +180,66 @@ function drawIcon(size) {
 }
 
 // ---------------------------------------------------------------------------
+// ICO writer (Windows): 32-bit BGRA bitmaps, one per size, exactly as the
+// Windows shell and electron-builder expect for `build/icon.ico`.
+// ---------------------------------------------------------------------------
+
+function encodeDib(width, height, rgba) {
+  const header = Buffer.alloc(40)
+  header.writeUInt32LE(40, 0) // biSize
+  header.writeInt32LE(width, 4) // biWidth
+  header.writeInt32LE(height * 2, 8) // biHeight: XOR bitmap + AND mask
+  header.writeUInt16LE(1, 12) // biPlanes
+  header.writeUInt16LE(32, 14) // biBitCount
+  header.writeUInt32LE(0, 16) // biCompression = BI_RGB
+  header.writeUInt32LE(width * height * 4, 20) // biSizeImage
+  // Rows are stored bottom-up, as BGRA.
+  const pixels = Buffer.alloc(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    const srcRow = height - 1 - y
+    for (let x = 0; x < width; x++) {
+      const from = (srcRow * width + x) * 4
+      const to = (y * width + x) * 4
+      pixels[to] = rgba[from + 2] // B
+      pixels[to + 1] = rgba[from + 1] // G
+      pixels[to + 2] = rgba[from] // R
+      pixels[to + 3] = rgba[from + 3] // A
+    }
+  }
+  // AND mask: one bit per pixel, rows padded to 32 bits. All zero because the
+  // alpha channel carries transparency.
+  const maskStride = Math.ceil(width / 32) * 4
+  const mask = Buffer.alloc(maskStride * height)
+  return Buffer.concat([header, pixels, mask])
+}
+
+function encodeIco(images) {
+  const header = Buffer.alloc(6)
+  header.writeUInt16LE(0, 0) // reserved
+  header.writeUInt16LE(1, 2) // type: icon
+  header.writeUInt16LE(images.length, 4)
+  const entries = []
+  const payloads = []
+  let offset = 6 + 16 * images.length
+  for (const img of images) {
+    const data = encodeDib(img.size, img.size, img.rgba)
+    const entry = Buffer.alloc(16)
+    entry[0] = img.size >= 256 ? 0 : img.size // 0 means 256
+    entry[1] = img.size >= 256 ? 0 : img.size
+    entry[2] = 0 // palette size
+    entry[3] = 0 // reserved
+    entry.writeUInt16LE(1, 4) // colour planes
+    entry.writeUInt16LE(32, 6) // bits per pixel
+    entry.writeUInt32LE(data.length, 8)
+    entry.writeUInt32LE(offset, 12)
+    offset += data.length
+    entries.push(entry)
+    payloads.push(data)
+  }
+  return Buffer.concat([header, ...entries, ...payloads])
+}
+
+// ---------------------------------------------------------------------------
 
 mkdirSync(buildDir, { recursive: true })
 rmSync(iconset, { recursive: true, force: true })
@@ -207,7 +267,16 @@ try {
   execFileSync('iconutil', ['-c', 'icns', iconset, '-o', join(buildDir, 'icon.icns')], { stdio: 'inherit' })
   console.log('wrote build/icon.icns')
 } catch (err) {
-  console.error('iconutil failed:', err.message)
+  // iconutil only exists on macOS; the .ico below is produced everywhere.
+  console.error('iconutil failed (expected off macOS):', err.message)
 }
 rmSync(iconset, { recursive: true, force: true })
+
+// Windows icon: the same artwork at every size the shell asks for.
+const icoSizes = [16, 24, 32, 48, 64, 128, 256]
+writeFileSync(
+  join(buildDir, 'icon.ico'),
+  encodeIco(icoSizes.map((size) => ({ size, rgba: drawIcon(size) })))
+)
+console.log('wrote build/icon.ico')
 console.log('icon generated')

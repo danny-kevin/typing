@@ -4,6 +4,15 @@
  * The menu bar (main process) and the keyboard shortcut matcher (renderer) both
  * read this table, so a shortcut can never drift away from the menu that
  * documents it.
+ *
+ * Accelerators are written once, in Electron's macOS notation (`Cmd+…`), and
+ * every platform derives its own form from that single string:
+ *
+ *  - the menu uses `acceleratorFor()`, which turns `Cmd` into `CmdOrCtrl` so
+ *    Electron resolves it to ⌘ on macOS and Ctrl on Windows and Linux;
+ *  - the renderer matches keyboard events with `commandForEvent()` and knows
+ *    which modifier is the platform's primary one;
+ *  - dialogs and tooltips print the human form with `displayAccelerator()`.
  */
 
 export const ACCELERATORS: Record<string, string> = {
@@ -55,6 +64,61 @@ export const ACCELERATORS: Record<string, string> = {
   'app.shortcuts': 'Cmd+Shift+/'
 }
 
+/** True when `platform` (a Node `process.platform` value) is macOS. */
+export function isMacPlatform(platform: string): boolean {
+  return platform === 'darwin'
+}
+
+/**
+ * The accelerator string Electron's menu API should use on `platform`.
+ * `Cmd` becomes `CmdOrCtrl`, which Electron resolves per platform.
+ */
+export function acceleratorFor(id: string, _platform = 'darwin'): string | undefined {
+  const accel = ACCELERATORS[id]
+  if (!accel) return undefined
+  return accel.replace(/(^|\+)Cmd(?=\+)/g, '$1CmdOrCtrl')
+}
+
+const MAC_GLYPHS: Record<string, string> = { Cmd: '⌘', Command: '⌘', Shift: '⇧', Alt: '⌥', Option: '⌥', Ctrl: '⌃' }
+const WIN_MODIFIERS: Record<string, string> = {
+  Cmd: 'Ctrl',
+  Command: 'Ctrl',
+  CmdOrCtrl: 'Ctrl',
+  Ctrl: 'Ctrl',
+  Control: 'Ctrl',
+  Shift: 'Shift',
+  Alt: 'Alt',
+  Option: 'Alt'
+}
+
+/**
+ * The human-readable form of a command's shortcut: `⇧⌘S` on macOS,
+ * `Ctrl+Shift+S` on Windows and Linux.
+ */
+export function displayAccelerator(id: string, platform = 'darwin'): string {
+  const accel = ACCELERATORS[id]
+  if (!accel) return ''
+  const parts = accel.split('+')
+  const key = parts.pop() ?? ''
+  const mods = parts
+  const keyLabel = key === 'Return' ? (isMacPlatform(platform) ? '↩' : 'Enter') : key
+  if (isMacPlatform(platform)) {
+    // macOS renders modifiers in a canonical order: ⌃⌥⇧⌘.
+    const rank = (m: string): number => (m === 'Ctrl' ? 0 : m === 'Alt' || m === 'Option' ? 1 : m === 'Shift' ? 2 : 3)
+    const glyphs = mods
+      .slice()
+      .sort((a, b) => rank(a) - rank(b))
+      .map((m) => MAC_GLYPHS[m] ?? MAC_GLYPHS[m[0].toUpperCase() + m.slice(1).toLowerCase()] ?? m)
+      .join('')
+    return `${glyphs}${keyLabel}`
+  }
+  const names = mods.map((m) => WIN_MODIFIERS[m] ?? m)
+  // Windows convention: Ctrl, then Alt, then Shift.
+  const rank = (m: string): number => (m === 'Ctrl' ? 0 : m === 'Alt' ? 1 : m === 'Shift' ? 2 : 3)
+  names.sort((a, b) => rank(a) - rank(b))
+  return [...names, keyLabel].join('+')
+}
+
 const CODE_FOR_KEY: Record<string, string> = {
   '/': 'Slash',
   '[': 'BracketLeft',
@@ -79,7 +143,9 @@ function codeForKey(key: string): string | null {
 export interface ParsedAccelerator {
   id: string
   code: string
-  meta: boolean
+  /** The platform's primary modifier: ⌘ on macOS, Ctrl on Windows and Linux. */
+  primary: boolean
+  /** An explicit Control modifier, which only exists as a separate key on macOS. */
   ctrl: boolean
   shift: boolean
   alt: boolean
@@ -91,7 +157,7 @@ export function parseAccelerator(id: string, accel: string): ParsedAccelerator |
   if (!key) return null
   const code = codeForKey(key)
   if (!code) return null
-  let meta = false
+  let primary = false
   let ctrl = false
   let shift = false
   let alt = false
@@ -100,7 +166,7 @@ export function parseAccelerator(id: string, accel: string): ParsedAccelerator |
       case 'cmd':
       case 'command':
       case 'cmdorctrl':
-        meta = true
+        primary = true
         break
       case 'ctrl':
       case 'control':
@@ -117,7 +183,7 @@ export function parseAccelerator(id: string, accel: string): ParsedAccelerator |
         break
     }
   }
-  return { id, code, meta, ctrl, shift, alt }
+  return { id, code, primary, ctrl, shift, alt }
 }
 
 export const PARSED_ACCELERATORS: ParsedAccelerator[] = Object.entries(ACCELERATORS)
@@ -129,11 +195,19 @@ export const PARSED_ACCELERATORS: ParsedAccelerator[] = Object.entries(ACCELERAT
  * Command keys are exhaustive: Cmd+S must not fire for Cmd+Shift+S.
  */
 export function commandForEvent(event: KeyboardEvent, isMac = true): string | null {
+  // Never steal a key while an IME is composing: on Windows especially, the
+  // keys that arrive during composition belong to the input method.
+  const composing =
+    (event as unknown as { isComposing?: boolean }).isComposing === true ||
+    (event as unknown as { keyCode?: number }).keyCode === 229
+  if (composing) return null
   for (const a of PARSED_ACCELERATORS) {
     if (a.code !== event.code) continue
-    const primary = isMac ? a.meta : a.ctrl
-    if (primary !== (isMac ? event.metaKey : event.ctrlKey)) continue
-    if (isMac && a.ctrl !== event.ctrlKey) continue
+    const primaryDown = isMac ? event.metaKey : event.ctrlKey
+    if (a.primary !== primaryDown) continue
+    if (isMac) {
+      if (a.ctrl !== event.ctrlKey) continue
+    } else if (a.ctrl && !event.ctrlKey) continue
     if (a.shift !== event.shiftKey) continue
     if (a.alt !== event.altKey) continue
     return a.id
