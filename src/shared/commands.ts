@@ -17,6 +17,13 @@
 
 export const ACCELERATORS: Record<string, string> = {
   'doc.new': 'Cmd+N',
+  'tab.new': 'Cmd+T',
+  'tab.close': 'Cmd+W',
+  'tab.next': 'Ctrl+Tab',
+  'tab.previous': 'Ctrl+Shift+Tab',
+  'tab.nextAlt': 'Cmd+Shift+]',
+  'tab.previousAlt': 'Cmd+Shift+[',
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`tab.jump${i + 1}`, `Cmd+Alt+${i + 1}`])),
   'doc.open': 'Cmd+O',
   'doc.openFolder': 'Cmd+Shift+Alt+O',
   'nav.quickOpen': 'Cmd+Shift+O',
@@ -59,7 +66,7 @@ export const ACCELERATORS: Record<string, string> = {
   'view.sidebar': 'Cmd+Shift+2',
   'view.focus': 'F8',
   'view.typewriter': 'F9',
-  'app.close': 'Cmd+W',
+  'app.close': 'Cmd+Shift+W',
   'app.prefs': 'Cmd+,',
   'app.shortcuts': 'Cmd+Shift+/'
 }
@@ -73,8 +80,16 @@ export function isMacPlatform(platform: string): boolean {
  * The accelerator string Electron's menu API should use on `platform`.
  * `Cmd` becomes `CmdOrCtrl`, which Electron resolves per platform.
  */
-export function acceleratorFor(id: string, _platform = 'darwin'): string | undefined {
-  const accel = ACCELERATORS[id]
+function platformAccelerator(id: string, platform: string): string | undefined {
+  if (!isMacPlatform(platform)) {
+    if (id === 'tab.nextAlt') return 'Ctrl+PageDown'
+    if (id === 'tab.previousAlt') return 'Ctrl+PageUp'
+  }
+  return ACCELERATORS[id]
+}
+
+export function acceleratorFor(id: string, platform = 'darwin'): string | undefined {
+  const accel = platformAccelerator(id, platform)
   if (!accel) return undefined
   return accel.replace(/(^|\+)Cmd(?=\+)/g, '$1CmdOrCtrl')
 }
@@ -96,7 +111,7 @@ const WIN_MODIFIERS: Record<string, string> = {
  * `Ctrl+Shift+S` on Windows and Linux.
  */
 export function displayAccelerator(id: string, platform = 'darwin'): string {
-  const accel = ACCELERATORS[id]
+  const accel = platformAccelerator(id, platform)
   if (!accel) return ''
   const parts = accel.split('+')
   const key = parts.pop() ?? ''
@@ -130,6 +145,9 @@ const CODE_FOR_KEY: Record<string, string> = {
   Return: 'Enter',
   Enter: 'Enter',
   Escape: 'Escape',
+  Tab: 'Tab',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
   '\\': 'Backslash'
 }
 
@@ -201,13 +219,13 @@ export function commandForEvent(event: KeyboardEvent, isMac = true): string | nu
     (event as unknown as { isComposing?: boolean }).isComposing === true ||
     (event as unknown as { keyCode?: number }).keyCode === 229
   if (composing) return null
-  for (const a of PARSED_ACCELERATORS) {
+  const parsed = isMac ? PARSED_ACCELERATORS : Object.keys(ACCELERATORS)
+    .map(id => parseAccelerator(id, platformAccelerator(id, 'win32')!))
+    .filter((a): a is ParsedAccelerator => a !== null)
+  for (const a of parsed) {
     if (a.code !== event.code) continue
-    const primaryDown = isMac ? event.metaKey : event.ctrlKey
-    if (a.primary !== primaryDown) continue
-    if (isMac) {
-      if (a.ctrl !== event.ctrlKey) continue
-    } else if (a.ctrl && !event.ctrlKey) continue
+    if (event.metaKey !== (isMac && a.primary)) continue
+    if (event.ctrlKey !== (a.ctrl || (!isMac && a.primary))) continue
     if (a.shift !== event.shiftKey) continue
     if (a.alt !== event.altKey) continue
     return a.id

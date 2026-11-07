@@ -25,6 +25,11 @@ export interface ArgvOptions {
  * The last existing candidate wins: a shell appends the file it was given last.
  */
 export function fileFromArgv(argv: readonly string[], opts: ArgvOptions = {}): string | null {
+  return filesFromArgv(argv, opts).at(-1) ?? null
+}
+
+/** All launch documents, deduplicated in argument order. */
+export function filesFromArgv(argv: readonly string[], opts: ArgvOptions = {}): string[] {
   const cwd = opts.cwd ?? process.cwd()
   const exists = opts.exists ?? ((p: string): boolean => fsExists(p))
   const candidates: string[] = []
@@ -38,13 +43,14 @@ export function fileFromArgv(argv: readonly string[], opts: ArgvOptions = {}): s
     if (/\.(app|exe)$/i.test(arg)) continue
     candidates.push(arg)
   }
-  for (const candidate of candidates.reverse()) {
+  const files: string[] = []
+  for (const candidate of candidates) {
     const absolute = isAbsolutePath(candidate) ? collapsePath(candidate) : collapsePath(joinPath(cwd, candidate))
     try {
-      if (exists(absolute)) return absolute
+      if (exists(absolute) && !files.includes(absolute)) files.push(absolute)
     } catch {
       /* an unreadable argument is simply not a document */
     }
   }
-  return null
+  return files
 }

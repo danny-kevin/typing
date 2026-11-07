@@ -78,7 +78,8 @@ export function buildMenuTemplate(send: Send, prefs: Prefs, opts: MenuBuildOptio
   const fileMenu: MenuItemConstructorOptions = {
     label: 'File',
     submenu: [
-      cmd('New', 'doc.new'),
+      cmd('New Document Tab', 'doc.new'),
+      cmd('New Tab', 'tab.new'),
       cmd('Open…', 'doc.open'),
       cmd('Open Folder…', 'doc.openFolder'),
       cmd('Quick Open…', 'nav.quickOpen'),
@@ -96,6 +97,7 @@ export function buildMenuTemplate(send: Send, prefs: Prefs, opts: MenuBuildOptio
       // Windows and Linux have no application menu, so Preferences lives in File
       // (the menu users look in) right above Exit.
       ...(mac ? [] : ([cmd('Preferences…', 'app.prefs'), { type: 'separator' }] as MenuItemConstructorOptions[])),
+      cmd('Close Tab', 'tab.close'),
       cmd('Close Window', 'app.close'),
       ...(mac
         ? []
@@ -196,6 +198,12 @@ export function buildMenuTemplate(send: Send, prefs: Prefs, opts: MenuBuildOptio
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [
+      cmd('Next Tab', 'tab.next'),
+      cmd('Previous Tab', 'tab.previous'),
+      cmd('Next Tab (Alternate)', 'tab.nextAlt'),
+      cmd('Previous Tab (Alternate)', 'tab.previousAlt'),
+      { label: 'Go to Tab', submenu: Array.from({ length: 9 }, (_, i) => cmd(i === 8 ? 'Last Tab' : `Tab ${i + 1}`, `tab.jump${i + 1}`)) },
+      { type: 'separator' },
       cmd('Source Code Mode', 'view.source', { type: 'checkbox', checked: prefs.sourceMode }),
       { type: 'separator' },
       cmd('Outline', 'view.outline', { type: 'checkbox', checked: prefs.showOutline }),

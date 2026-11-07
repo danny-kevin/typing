@@ -88,7 +88,7 @@ describe('menu template: Windows', () => {
       if (!item.accelerator) return
       expect(item.accelerator).not.toMatch(/(^|\+)Cmd\+/)
       expect(item.accelerator).not.toMatch(/[⌘⇧⌥⌃]/)
-      if (!/^F\d+$/.test(item.accelerator)) expect(item.accelerator).toMatch(/CmdOrCtrl\+/)
+      if (!/^F\d+$/.test(item.accelerator)) expect(item.accelerator).toMatch(/(?:CmdOrCtrl|Ctrl)\+/)
     })
     const accelerators = new Set<string>()
     walk(winTemplate, (item) => {
@@ -127,7 +127,9 @@ describe('menu template: Windows', () => {
       }
       byAccelerator.set(item.accelerator, item.id ?? item.label ?? '')
     })
-    // The accelerator table itself carries no macOS-only modifier strings.
-    for (const accel of Object.values(ACCELERATORS)) expect(accel).not.toContain('Ctrl+')
+    // Explicit Control is intentional for Ctrl+Tab on both platforms.
+    for (const [id, accel] of Object.entries(ACCELERATORS)) {
+      if (!['tab.next', 'tab.previous'].includes(id)) expect(accel).not.toContain('Ctrl+')
+    }
   })
 })

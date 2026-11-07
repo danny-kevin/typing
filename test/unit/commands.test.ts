@@ -19,6 +19,25 @@ function key(init: Partial<KeyboardEvent> & { code: string }): KeyboardEvent {
   } as KeyboardEvent
 }
 
+describe('tab commands', () => {
+  it('matches Control Tab on both platforms, not plain Tab', () => {
+    for (const mac of [true, false]) {
+      expect(commandForEvent(key({ code: 'Tab', ctrlKey: true }), mac)).toBe('tab.next')
+      expect(commandForEvent(key({ code: 'Tab', ctrlKey: true, shiftKey: true }), mac)).toBe('tab.previous')
+      expect(commandForEvent(key({ code: 'Tab' }), mac)).toBeNull()
+    }
+  })
+  it('preserves headings and supplies nonconflicting jumps and platform alternatives', () => {
+    expect(commandForEvent(key({ code: 'Digit1', metaKey: true, altKey: true }), true)).toBe('tab.jump1')
+    expect(commandForEvent(key({ code: 'Digit9', ctrlKey: true, altKey: true }), false)).toBe('tab.jump9')
+    expect(commandForEvent(key({ code: 'PageDown', ctrlKey: true }), false)).toBe('tab.nextAlt')
+    expect(commandForEvent(key({ code: 'BracketLeft', metaKey: true, shiftKey: true }), true)).toBe('tab.previousAlt')
+    expect(acceleratorFor('tab.nextAlt', 'win32')).toBe('Ctrl+PageDown')
+    expect(commandForEvent(key({ code: 'KeyW', metaKey: true }))).toBe('tab.close')
+    expect(commandForEvent(key({ code: 'KeyW', ctrlKey: true }), false)).toBe('tab.close')
+  })
+})
+
 describe('command table', () => {
   it('parses every accelerator', () => {
     for (const [id, accel] of Object.entries(ACCELERATORS)) {

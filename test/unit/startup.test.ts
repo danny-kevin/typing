@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileFromArgv } from '../../src/main/startup'
+import { fileFromArgv, filesFromArgv } from '../../src/main/startup'
 
 /** Pretend exactly these paths exist, whatever platform the test runs on. */
 function existsOnly(paths: string[]): (p: string) => boolean {
@@ -8,6 +8,9 @@ function existsOnly(paths: string[]): (p: string) => boolean {
 }
 
 describe('opening a file passed on the command line', () => {
+  it('collects every existing argument once in launch order', () => {
+    expect(filesFromArgv(['typing', '/a.md', '/missing', '/b.md', '/a.md'], { exists: existsOnly(['/a.md', '/b.md']) })).toEqual(['/a.md', '/b.md'])
+  })
   it('reads a macOS argv launch', () => {
     const argv = ['/Applications/Typing.app/Contents/MacOS/Typing', '/Users/danny/notes/today.md']
     expect(fileFromArgv(argv, { exists: existsOnly(['/Users/danny/notes/today.md']) })).toBe('/Users/danny/notes/today.md')

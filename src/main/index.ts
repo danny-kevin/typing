@@ -10,7 +10,7 @@ import { isInsidePath } from '../shared/paths'
 import { pathFromAssetUrl } from '../shared/assets'
 import { DEFAULT_PREFS, type Prefs, type DirEntry, type RecentFile } from '../shared/types'
 import { buildMenu } from './menu'
-import { fileFromArgv } from './startup'
+import { filesFromArgv } from './startup'
 
 const isDev = !app.isPackaged
 const isMac = process.platform === 'darwin'
@@ -35,6 +35,7 @@ if (userDataOverride) {
 }
 
 let mainWindow: BrowserWindow | null = null
+let rendererReady = false
 /** Set once the renderer has confirmed that closing is safe. */
 let allowClose = false
 let quitRequested = false
@@ -105,7 +106,7 @@ async function addAssetRoot(dir: string): Promise<void> {
 }
 
 async function readFileForEditor(path: string): Promise<unknown> {
-  const abs = resolve(path)
+  const abs = await fs.realpath(resolve(path)).catch(() => resolve(path))
   try {
     const bytes = new Uint8Array(await fs.readFile(abs))
     const doc = decodeDoc(bytes)
@@ -140,8 +141,6 @@ function watchDocument(path: string, mtimeMs: number, size: number): void {
     watched.set(path, { mtimeMs, size })
     return
   }
-  // Only the document in the editor needs change notifications.
-  for (const other of [...watched.keys()]) if (other !== path) unwatchDocument(other)
   watched.set(path, { mtimeMs, size })
   watchFile(path, { interval: 1500 }, async (curr) => {
     const known = watched.get(path)
@@ -163,9 +162,23 @@ function unwatchDocument(path: string): void {
 // IPC surface
 // ---------------------------------------------------------------------------
 
+// Order save/clear requests per recovery identity, including in-flight IPC.
+const recoveryWrites = new Map<string, Promise<unknown>>()
+async function recoveryWrite(key: string, operation: () => Promise<unknown>): Promise<void> {
+  const previous = recoveryWrites.get(key) ?? Promise.resolve()
+  const next = previous.catch(() => {}).then(operation)
+  recoveryWrites.set(key, next)
+  try { await next } finally { if (recoveryWrites.get(key) === next) recoveryWrites.delete(key) }
+}
+
 type Handler = (args: any[]) => Promise<unknown> | unknown
 
 const handlers: Record<string, Handler> = {
+  async 'renderer.ready'() {
+    rendererReady = true
+    for (const path of pendingOpenPaths.splice(0)) openPathFromOutside(path)
+    return true
+  },
   async appInfo() {
     return {
       version: app.getVersion(),
@@ -189,14 +202,14 @@ const handlers: Record<string, Handler> = {
   },
   async 'dialog.openFile'() {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      properties: ['openFile'],
+      properties: ['openFile', 'multiSelections'],
       filters: [
         { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx', 'txt'] },
         { name: 'All files', extensions: ['*'] }
       ]
     })
     if (result.canceled || !result.filePaths.length) return null
-    return result.filePaths[0]
+    return result.filePaths
   },
   async 'dialog.openFolder'() {
     const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'] })
@@ -226,8 +239,15 @@ const handlers: Record<string, Handler> = {
     if (result.canceled || !result.filePath) return null
     return result.filePath
   },
+  async 'file.resolve'([path]) {
+    return fs.realpath(resolve(String(path))).catch(() => resolve(String(path)))
+  },
   async 'file.read'([path]) {
     return readFileForEditor(String(path))
+  },
+  async 'file.release'([path]) {
+    unwatchDocument(String(path))
+    return true
   },
   async 'file.stat'([path]) {
     return statOrNull(String(path))
@@ -296,6 +316,14 @@ const handlers: Record<string, Handler> = {
     const items = [e, ...r.items.filter((i) => i.path !== e.path)].slice(0, 25)
     await writeJson(recentsPath(), { items })
     return items
+  },
+  async 'menu.sourceMode'([source]) {
+    Menu.setApplicationMenu(buildMenu(sendCommand, { ...getPrefsSnapshot(), sourceMode: Boolean(source) }))
+    return true
+  },
+  async 'window.cancelClose'() {
+    quitRequested = false
+    return true
   },
   async 'window.setTitle'([title, filePath]) {
     if (!mainWindow) return false
@@ -400,14 +428,13 @@ const handlers: Record<string, Handler> = {
     }
   },
   async 'recovery.save'([draft]) {
-    const d = draft as { path: string | null; text: string; savedAt: number; baseMtimeMs: number }
-    const key = createHash('sha1')
-      .update(d.path ?? `untitled-${d.savedAt}`)
-      .digest('hex')
-      .slice(0, 16)
-    await fs.mkdir(recoveryDir(), { recursive: true })
-    const target = join(recoveryDir(), `${key}.json`)
-    await writeJson(target, { ...d, key, name: d.path ? basename(d.path) : 'Untitled' })
+    const d = draft as { key?: string; path: string | null; text: string; savedAt: number; baseMtimeMs: number }
+    const key = d.key && /^[0-9a-f]{16}$/.test(d.key) ? d.key : createHash('sha1')
+      .update(d.path ?? `untitled-${d.savedAt}`).digest('hex').slice(0, 16)
+    await recoveryWrite(key, async () => {
+      const target = join(recoveryDir(), `${key}.json`)
+      await writeJson(target, { ...d, key, name: d.path ? basename(d.path) : 'Untitled' })
+    })
     return key
   },
   async 'recovery.clear'([target]) {
@@ -415,7 +442,7 @@ const handlers: Record<string, Handler> = {
     const key = /^[0-9a-f]{16}$/.test(raw)
       ? raw
       : createHash('sha1').update(raw).digest('hex').slice(0, 16)
-    await fs.rm(join(recoveryDir(), `${key}.json`), { force: true })
+    await recoveryWrite(key, () => fs.rm(join(recoveryDir(), `${key}.json`), { force: true }))
     return true
   },
   async 'recovery.list'() {
@@ -517,6 +544,7 @@ function sendCommand(command: string, payload?: unknown): void {
 }
 
 function createWindow(): void {
+  rendererReady = false
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 820,
@@ -588,14 +616,15 @@ app.on('open-file', (event, path) => {
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
   } else {
-    pendingOpenPath = path
+    pendingOpenPaths.push(path)
   }
 })
 
-let pendingOpenPath: string | null = null
+const pendingOpenPaths: string[] = []
 
 /** A path from the command line, an "open with", a dock drop or a drag. */
 function openPathFromOutside(path: string): void {
+  if (!rendererReady) { pendingOpenPaths.push(path); return }
   const abs = resolve(path)
   try {
     if (existsSync(path) && statSync(path).isDirectory()) {
@@ -614,8 +643,9 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', (_e, argv) => {
-    const file = fileFromArgv(argv)
-    if (file && mainWindow) openPathFromOutside(file)
+    const files = filesFromArgv(argv)
+    if (mainWindow) for (const file of files) openPathFromOutside(file)
+    else pendingOpenPaths.push(...files)
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -675,11 +705,7 @@ if (!gotLock) {
     createWindow()
     Menu.setApplicationMenu(buildMenu(sendCommand, prefs))
 
-    const initial = pendingOpenPath ?? fileFromArgv(process.argv)
-    pendingOpenPath = null
-    if (initial) {
-      mainWindow?.webContents.once('did-finish-load', () => openPathFromOutside(initial))
-    }
+    pendingOpenPaths.push(...filesFromArgv(process.argv))
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

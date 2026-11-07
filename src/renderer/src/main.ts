@@ -28,6 +28,7 @@ import { buildExportHtml } from './export'
 import { livePreviewOptions } from './editor/live-preview'
 import { commandForEvent, displayAccelerator, isMacPlatform } from '../../shared/commands'
 import { baseName, dirName, joinPath, prettyPath, relativePath, toPosixPath } from '../../shared/paths'
+import { Tabs } from './tabs'
 
 interface Api {
   call: (method: string, ...args: unknown[]) => Promise<any>
@@ -53,26 +54,25 @@ interface DocState {
   validUtf8: boolean
   savedText: string
   externalChange: boolean
+  deleted: boolean
+  id: string
+  editor: EditorController
+  panel: HTMLElement
+  sourceMode: boolean
+  touched: boolean
+  generation: number
+  loading: boolean
+  closing: boolean
+  autosaveTimer: number
+  draftTimer: number
+  saveTask?: Promise<boolean>
+  scrollSnapshot?: ReturnType<EditorView['scrollSnapshot']>
+  scrollDoc?: EditorView['state']['doc']
 }
 
-const doc: DocState = {
-  path: null,
-  baseMtimeMs: 0,
-  baseHash: '',
-  eol: '\n',
-  lineEndings: '',
-  bom: false,
-  validUtf8: true,
-  savedText: '',
-  externalChange: false
-}
-
-/**
- * Bumped every time a different document is installed in the editor. An async
- * save compares it before it writes and before it adopts a result, so a save
- * started for one file can never land in (or relabel) another one.
- */
-let docGeneration = 0
+const tabs = new Tabs<DocState>(api.platform)
+let doc: DocState
+let closingWindow = false
 const isMac = isMacPlatform(api.platform)
 /** The user's home directory, for `~`-shortened paths in the status bar. */
 let homeDir: string | null = null
@@ -84,8 +84,6 @@ let folderFiles: string[] = []
 let fileTree: ui.FileTree
 let statusTimer = 0
 let outlineTimer = 0
-let autosaveTimer = 0
-let draftTimer = 0
 let findState = { matches: [] as Match[], index: -1, replaceMode: false }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
@@ -108,17 +106,10 @@ async function boot(): Promise<void> {
   }
   applyShortcutLabels()
 
-  editor = createEditor($('editor-host'), {
-    onChange: onDocChange,
-    onSelection: onSelectionChange,
-    onScroll: () => {},
-    onFocus: () => {},
-    onBlur: () => {}
-  })
+  createDocument('', { path: null })
   wireButtons()
   wireFindBar()
   wireDragAndDrop()
-  wireLinks()
   wireGlobalKeys()
   applyPrefs()
   rebuildOutline()
@@ -138,7 +129,7 @@ async function boot(): Promise<void> {
         void onExternalChange(payload.path)
         break
       case 'theme:changed':
-        applyThemeClass()
+        applyThemeClass(payload?.dark)
         break
       default:
         break
@@ -152,11 +143,12 @@ async function boot(): Promise<void> {
   updateTitle()
   updateStatus()
   await offerRecovery()
+  await api.call('renderer.ready')
   editor.focus()
 }
 
-function applyThemeClass(): void {
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+function applyThemeClass(darkOverride?: boolean): void {
+  const dark = typeof darkOverride === 'boolean' ? darkOverride : window.matchMedia('(prefers-color-scheme: dark)').matches
   document.documentElement.classList.toggle('dark', dark)
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
 }
@@ -177,7 +169,7 @@ function applyShortcutLabels(): void {
   set('btn-open-folder', 'Open folder', 'doc.openFolder')
 }
 
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyThemeClass)
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => applyThemeClass(event.matches))
 
 function applyPrefs(): void {
   const root = document.documentElement
@@ -186,16 +178,20 @@ function applyPrefs(): void {
   root.style.setProperty('--editor-line-height', String(prefs.lineHeight))
   if (prefs.fontFamily) root.style.setProperty('--editor-font-family', prefs.fontFamily)
   else root.style.removeProperty('--editor-font-family')
-  root.classList.toggle('source-mode', prefs.sourceMode)
-  editor.setSourceMode(prefs.sourceMode)
-  editor.setSpellCheck(prefs.spellCheck)
+  root.classList.toggle('source-mode', doc.sourceMode)
+  for (const tab of tabs.items) {
+    tab.editor.setSourceMode(tab.sourceMode)
+    tab.editor.setSpellCheck(prefs.spellCheck)
+    tab.editor.setFocusMode(prefs.focusMode)
+    scheduleAutosave(tab)
+  }
+  root.classList.toggle('source-mode', doc.sourceMode)
   editor.setAutoPair(prefs.autoPair)
   editor.setSmartPaste(prefs.smartPaste)
   livePreviewOptions.focusMode = prefs.focusMode
-  editor.setFocusMode(prefs.focusMode)
   $('outline').classList.toggle('hidden', !prefs.showOutline)
   setToggleState('btn-outline', prefs.showOutline)
-  setToggleState('btn-source', prefs.sourceMode)
+  setToggleState('btn-source', doc.sourceMode)
   setToggleState('btn-sidebar', !$('sidebar').classList.contains('hidden'))
   updateModeChip()
   api.refreshMenu()
@@ -209,8 +205,10 @@ function setToggleState(id: string, on: boolean): void {
 }
 
 async function setPrefs(patch: Partial<Prefs>): Promise<void> {
+  if (patch.sourceMode !== undefined) doc.sourceMode = patch.sourceMode
   prefs = { ...prefs, ...patch }
   await api.call('prefs.set', patch)
+  prefs.sourceMode = doc.sourceMode
   applyPrefs()
 }
 
@@ -218,17 +216,21 @@ async function setPrefs(patch: Partial<Prefs>): Promise<void> {
 // Document lifecycle
 // ---------------------------------------------------------------------------
 
-function isDirty(): boolean {
-  return editor.getText() !== doc.savedText
+function isDirty(target = doc): boolean {
+  return target.editor.getText() !== target.savedText
 }
 
-function onDocChange(): void {
+function onDocChange(target = doc): void {
+  if (target.loading) return
+  target.touched = true
+  scheduleAutosave(target)
+  scheduleDraft(target)
+  renderTabs()
+  if (target !== doc) return
   updateTitle()
   document.documentElement.classList.toggle('dirty', isDirty())
   scheduleStatus()
   scheduleOutline()
-  scheduleAutosave()
-  scheduleDraft()
   if (findState.matches.length) computeMatches()
 }
 
@@ -249,39 +251,42 @@ function scheduleOutline(): void {
   outlineTimer = window.setTimeout(rebuildOutline, 250)
 }
 
-function scheduleAutosave(): void {
-  if (!prefs.autoSave || !doc.path) return
-  // A file whose bytes are not valid UTF-8 must never be rewritten in place by
-  // a background write; the user has to choose Save As explicitly.
-  if (!doc.validUtf8) return
-  // While a change on disk is unresolved, autosave would quietly rewrite the
-  // file as a conflict copy; wait for the user's answer instead.
-  if (doc.externalChange) return
-  if (autosaveTimer) window.clearTimeout(autosaveTimer)
-  autosaveTimer = window.setTimeout(() => {
-    if (doc.path && isDirty()) void save(false, { autosave: true })
+function scheduleAutosave(target = doc): void {
+  if (target.autosaveTimer) window.clearTimeout(target.autosaveTimer)
+  if (target.closing || closingWindow || !prefs.autoSave || !target.path || !target.validUtf8 || target.externalChange) return
+  target.autosaveTimer = window.setTimeout(() => {
+    target.autosaveTimer = 0
+    if (isDirty(target)) void save(false, { autosave: true }, target)
   }, prefs.autoSaveMs)
 }
 
-function scheduleDraft(): void {
-  if (draftTimer) window.clearTimeout(draftTimer)
-  draftTimer = window.setTimeout(() => {
-    if (!isDirty()) return
-    void api.call('recovery.save', {
-      path: doc.path,
-      text: editor.getText(),
-      savedAt: Date.now(),
-      baseMtimeMs: doc.baseMtimeMs
-    })
-  }, 900)
+function persistDraft(target: DocState): void {
+  if (!isDirty(target)) {
+    void api.call('recovery.clear', target.id)
+    return
+  }
+  void api.call('recovery.save', {
+    key: target.id, path: target.path, text: target.editor.getText(), savedAt: Date.now(),
+    baseMtimeMs: target.baseMtimeMs, baseHash: target.baseHash, savedText: target.savedText,
+    eol: target.eol, lineEndings: target.lineEndings, bom: target.bom,
+    validUtf8: target.validUtf8, sourceMode: target.sourceMode
+  })
 }
 
-/** Drop the writes that were scheduled for the document we are leaving. */
-function cancelPendingWrites(): void {
-  if (autosaveTimer) window.clearTimeout(autosaveTimer)
-  if (draftTimer) window.clearTimeout(draftTimer)
-  autosaveTimer = 0
-  draftTimer = 0
+function scheduleDraft(target = doc): void {
+  if (target.draftTimer) window.clearTimeout(target.draftTimer)
+  if (target.closing) return
+  target.draftTimer = window.setTimeout(() => {
+    target.draftTimer = 0
+    persistDraft(target)
+  }, 300)
+}
+
+/** Cancel only this document's scheduled writes, never another tab's. */
+function cancelPendingWrites(target = doc): void {
+  window.clearTimeout(target.autosaveTimer)
+  window.clearTimeout(target.draftTimer)
+  target.autosaveTimer = target.draftTimer = 0
 }
 
 function updateTitle(): void {
@@ -291,7 +296,9 @@ function updateTitle(): void {
   document.title = title
   $('doc-title').textContent = `${dirty ? '• ' : ''}${name}${doc.externalChange ? ' (changed on disk)' : ''}`
   void api.call('window.setTitle', title, doc.path ?? '')
-  void api.call('window.setDocumentEdited', dirty)
+  void api.call('window.setDocumentEdited', tabs.items.some(tab => isDirty(tab)))
+  document.documentElement.classList.toggle('dirty', dirty)
+  renderTabs()
 }
 
 function updateStatus(): void {
@@ -329,40 +336,164 @@ function updateSaveChip(): void {
 function updateModeChip(): void {
   const chip = $('status-mode')
   const bits: string[] = []
-  if (prefs.sourceMode) bits.push('source')
+  if (doc.sourceMode) bits.push('source')
   else bits.push('live')
   if (prefs.focusMode) bits.push('focus')
   if (prefs.typewriterMode) bits.push('typewriter')
   chip.textContent = bits.join(' · ')
 }
 
-function setDocument(
-  text: string,
-  meta: Partial<DocState> & { path: string | null }
-): void {
-  docGeneration++
-  cancelPendingWrites()
+function setDocument(text: string, meta: Partial<DocState> & { path: string | null }, target = doc): void {
+  target.generation++
+  target.scrollSnapshot = undefined
+  target.scrollDoc = undefined
+  cancelPendingWrites(target)
+  Object.assign(target, {
+    path: meta.path, baseMtimeMs: meta.baseMtimeMs ?? 0, baseHash: meta.baseHash ?? '',
+    eol: meta.eol ?? '\n', lineEndings: meta.lineEndings ?? '', bom: meta.bom ?? false,
+    validUtf8: meta.validUtf8 ?? true, externalChange: false, deleted: false, savedText: text
+  })
+  target.loading = true
+  target.editor.setPath(meta.path ?? '')
+  target.editor.setText(text)
+  target.loading = false
+  target.savedText = target.editor.getText()
+  void api.call('recovery.clear', target.id)
+  if (target === doc) refreshActiveDocument()
+}
+
+function createDocument(text: string, meta: Partial<DocState> & { path: string | null }): DocState {
+  const panel = document.createElement('div')
+  panel.className = 'document-panel'
+  panel.setAttribute('role', 'tabpanel')
+  const target = {
+    ...meta, id: crypto.randomUUID().replace(/-/g, '').slice(0, 16), panel,
+    sourceMode: prefs.sourceMode, touched: false, generation: 0, loading: true,
+    closing: false, autosaveTimer: 0, draftTimer: 0
+  } as DocState
+  panel.id = `panel-${target.id}`
+  panel.setAttribute('aria-labelledby', `tab-${target.id}`)
+  target.editor = createEditor(panel, {
+    onChange: () => onDocChange(target),
+    onSelection: () => { if (!target.loading && target === doc) onSelectionChange() },
+    onScroll: () => {}, onFocus: () => {}, onBlur: () => {}
+  })
+  tabs.add(target)
+  setDocument(text, meta, target)
+  target.editor.setSourceMode(target.sourceMode)
+  wireEditorLinks(target.editor)
+  activateTab(target)
+  return target
+}
+
+function activateTab(target: DocState, focus = true): void {
+  if (!tabs.items.includes(target)) return
+  if (doc && doc !== target && tabs.items.includes(doc)) {
+    doc.scrollSnapshot = doc.editor.view.scrollSnapshot()
+    doc.scrollDoc = doc.editor.view.state.doc
+    doc.panel.remove()
+  }
+  tabs.active = doc = target
+  editor = target.editor
+  prefs.sourceMode = target.sourceMode
+  if (target.panel.parentElement !== $('editor-host')) $('editor-host').replaceChildren(target.panel)
+  document.documentElement.classList.toggle('source-mode', target.sourceMode)
+  editor.setSpellCheck(prefs.spellCheck)
+  if (target.scrollSnapshot && target.scrollDoc === editor.view.state.doc) {
+    editor.view.dispatch({ effects: target.scrollSnapshot })
+  }
+  target.scrollSnapshot = undefined
+  target.scrollDoc = undefined
+  editor.view.requestMeasure()
+  refreshActiveDocument()
+  if (focus) editor.focus()
+  document.getElementById(`tab-${target.id}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
+function refreshActiveDocument(): void {
+  setDocContext(doc.path ?? '')
   resetFindState()
-  doc.path = meta.path
-  doc.baseMtimeMs = meta.baseMtimeMs ?? 0
-  doc.baseHash = meta.baseHash ?? ''
-  doc.eol = meta.eol ?? '\n'
-  doc.lineEndings = meta.lineEndings ?? ''
-  doc.bom = meta.bom ?? false
-  doc.validUtf8 = meta.validUtf8 ?? true
-  doc.externalChange = false
-  doc.savedText = text
-  setDocContext(meta.path ?? '')
-  editor.setText(text)
-  doc.savedText = editor.getText()
-  ui.hideBanner()
   updateTitle()
   updateStatus()
   rebuildOutline()
-  if (meta.path) fileTree?.select(meta.path)
-  void api.call('window.setRepresentedFile', meta.path ?? '')
-  $('editor-host').scrollTop = 0
-  editor.setSelection(0, 0, false)
+  setToggleState('btn-source', doc.sourceMode)
+  void api.call('window.setRepresentedFile', doc.path ?? '')
+  void api.call('menu.sourceMode', doc.sourceMode)
+  if (doc.path) fileTree?.select(doc.path)
+  ui.hideBanner()
+  if (doc.deleted) showDeletedBanner()
+  else if (doc.externalChange) void promptExternalChange(doc)
+  else if (!doc.validUtf8) promptInvalidUtf8()
+  if (!$('findbar').classList.contains('hidden')) computeMatches()
+}
+
+function renderTabs(): void {
+  const strip = $('tab-list')
+  if (!strip) return
+  // Retain nodes while typing/focusing: keyboard focus and an ongoing drag must
+  // not disappear merely because a dirty marker changed.
+  for (const child of Array.from(strip.children)) {
+    if (!tabs.items.some(tab => child.id === `item-${tab.id}`)) child.remove()
+  }
+  tabs.items.forEach((tab, index) => {
+    let item = document.getElementById(`item-${tab.id}`)
+    const name = tab.path ? baseName(tab.path) : 'Untitled'
+    if (!item) {
+      item = document.createElement('div')
+      item.id = `item-${tab.id}`
+      item.className = 'document-tab'
+      item.draggable = true
+      const button = document.createElement('button')
+      button.id = `tab-${tab.id}`
+      button.className = 'tab-label'
+      button.setAttribute('role', 'tab')
+      button.setAttribute('aria-controls', tab.panel.id)
+      button.addEventListener('click', () => activateTab(tab))
+      button.addEventListener('keydown', e => {
+        let next: DocState | undefined
+        if (e.altKey && e.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+          e.preventDefault()
+          tabs.move(tab, tabs.items.indexOf(tab) + (e.key === 'ArrowRight' ? 1 : -1))
+          renderTabs()
+          return
+        }
+        if (e.key === 'ArrowRight') next = tabs.relative(1)
+        else if (e.key === 'ArrowLeft') next = tabs.relative(-1)
+        else if (e.key === 'Home') next = tabs.items[0]
+        else if (e.key === 'End') next = tabs.items.at(-1)
+        else if (e.key === 'Delete') { e.preventDefault(); void closeTab(tab); return }
+        if (next) { e.preventDefault(); activateTab(next, false); $(`tab-${next.id}`).focus() }
+      })
+      const close = document.createElement('button')
+      close.className = 'tab-close'
+      close.textContent = '×'
+      close.addEventListener('click', () => void closeTab(tab))
+      item.addEventListener('auxclick', e => { if (e.button === 1) { e.preventDefault(); void closeTab(tab) } })
+      item.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault() })
+      item.addEventListener('dragstart', e => {
+        e.dataTransfer?.setData('application/x-typing-tab', tab.id)
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+      })
+      item.addEventListener('dragover', e => {
+        if (e.dataTransfer?.types.includes('application/x-typing-tab')) e.preventDefault()
+      })
+      item.addEventListener('drop', e => {
+        const id = e.dataTransfer?.getData('application/x-typing-tab')
+        const moved = tabs.items.find(t => t.id === id)
+        if (moved) { e.preventDefault(); e.stopPropagation(); tabs.move(moved, tabs.items.indexOf(tab)); renderTabs() }
+      })
+      item.append(button, close)
+    }
+    const button = item.querySelector('.tab-label')!
+    button.textContent = `${isDirty(tab) ? '• ' : ''}${name}${tab.externalChange || tab.deleted ? ' !' : ''}`
+    button.setAttribute('aria-label', `${name}${isDirty(tab) ? ', unsaved changes' : ''}${tab.externalChange || tab.deleted ? ', changed on disk' : ''}`)
+    button.setAttribute('aria-selected', String(tab === doc))
+    button.setAttribute('tabindex', tab === doc ? '0' : '-1')
+    item.querySelector('.tab-close')!.setAttribute('aria-label', `Close ${name}`)
+    item.classList.toggle('active', tab === doc)
+    item.title = tab.path ?? 'Untitled'
+    if (strip.children[index] !== item) strip.insertBefore(item, strip.children[index] ?? null)
+  })
 }
 
 /** Search results belong to one document; a switch must not keep them. */
@@ -387,10 +518,11 @@ function resetFindState(): void {
  */
 let guardInFlight = false
 
-async function guardUnsavedWork(): Promise<boolean> {
-  if (!isDirty()) return true
+async function guardUnsavedWork(target = doc): Promise<boolean> {
+  if (!isDirty(target)) return true
   if (guardInFlight) return false
-  const name = doc.path ? baseName(doc.path) : 'Untitled'
+  activateTab(target)
+  const name = target.path ? baseName(target.path) : 'Untitled'
   guardInFlight = true
   try {
     const choice = await ui.choiceDialog(
@@ -402,7 +534,7 @@ async function guardUnsavedWork(): Promise<boolean> {
         { label: 'Save', value: 'save', primary: true }
       ]
     )
-    if (choice === 'save') return await save(false)
+    if (choice === 'save') return await save(false, {}, target) && !isDirty(target)
     return choice === 'discard'
   } finally {
     guardInFlight = false
@@ -410,35 +542,78 @@ async function guardUnsavedWork(): Promise<boolean> {
 }
 
 async function newDocument(): Promise<boolean> {
-  if (!(await guardUnsavedWork())) return false
-  setDocument('', { path: null, baseMtimeMs: 0, baseHash: '', eol: '\n', lineEndings: '', bom: false })
-  ui.toast('New document')
+  if (closingWindow || guardInFlight) return false
+  createDocument('', { path: null })
   return true
 }
 
-async function openFile(path: string, options: { alreadyGuarded?: boolean } = {}): Promise<boolean> {
-  if (!options.alreadyGuarded && !(await guardUnsavedWork())) return false
+async function disposeTab(target: DocState): Promise<void> {
+  cancelPendingWrites(target)
+  tabs.close(target)
+  target.panel.remove()
+  target.editor.view.destroy()
+  await api.call('recovery.clear', target.id)
+  if (target.path && !tabs.find(target.path)) await api.call('file.release', target.path)
+}
+
+async function closeTab(target = doc): Promise<void> {
+  if (closingWindow || guardInFlight || target.closing) return
+  target.closing = true
+  cancelPendingWrites(target)
+  try {
+    if (target.saveTask) await target.saveTask
+    if (!(await guardUnsavedWork(target))) return
+    await disposeTab(target)
+    if (tabs.active) activateTab(tabs.active)
+    else await api.call('window.close', true)
+  } finally {
+    target.closing = false
+    if (tabs.items.includes(target)) { scheduleAutosave(target); scheduleDraft(target) }
+  }
+}
+
+type OpenOptions = { alreadyGuarded?: boolean; target?: DocState }
+let opening = Promise.resolve(true)
+function openFile(path: string, options: OpenOptions = {}): Promise<boolean> {
+  const task = opening.catch(() => false).then(() => openFileInTab(path, options))
+  opening = task
+  return task
+}
+
+async function openFileInTab(path: string, options: OpenOptions): Promise<boolean> {
+  if (closingWindow || guardInFlight) return false
+  path = await api.call('file.resolve', path)
+  const saving = savingPaths.get(pathKey(path))
+  if (saving?.saveTask) await saving.saveTask
+  const existing = tabs.find(path)
+  if (existing && !options.alreadyGuarded) { activateTab(existing); return true }
   const result = (await api.call('file.read', path)) as FileReadResult & { ok: boolean; error?: string }
   if (!result.ok) {
     ui.showBanner(`Could not open ${path}: ${result.error}`, [{ label: 'Dismiss', onClick: ui.hideBanner }])
     return false
   }
-  setDocument(result.text, {
-    path: result.path,
-    baseMtimeMs: result.mtimeMs,
-    baseHash: result.hash,
-    eol: result.eol,
-    lineEndings: result.lineEndings,
-    bom: result.bom,
-    validUtf8: result.validUtf8
-  })
+  if (closingWindow) return false
+  const duplicate = tabs.find(result.path)
+  if (duplicate && !options.alreadyGuarded) { activateTab(duplicate); return true }
+  const meta = { ...result, baseMtimeMs: result.mtimeMs, baseHash: result.hash }
+  if (options.alreadyGuarded) {
+    const target = options.target ?? doc
+    if (!tabs.items.includes(target)) return false
+    setDocument(result.text, meta, target)
+  } else {
+    const empty = doc.path === null && !doc.touched && !isDirty() && !editor.getText()
+    const replaced = empty ? doc : null
+    createDocument(result.text, meta)
+    if (replaced) await disposeTab(replaced)
+    renderTabs()
+  }
   if (!result.validUtf8) promptInvalidUtf8()
   return true
 }
 
 async function openFileDialog(): Promise<void> {
-  const path = await api.call('dialog.openFile')
-  if (path) await openFile(path)
+  const paths = await api.call('dialog.openFile')
+  for (const path of Array.isArray(paths) ? paths : paths ? [paths] : []) await openFile(path)
 }
 
 async function loadFolder(dir: string, persist = true): Promise<void> {
@@ -456,6 +631,9 @@ async function loadFolder(dir: string, persist = true): Promise<void> {
   if (doc.path) fileTree.select(doc.path)
 }
 
+const savingPaths = new Map<string, DocState>()
+const pathKey = (path: string): string => api.platform === 'win32' ? path.replace(/\\/g, '/').toLowerCase() : path
+
 interface SaveOptions {
   /** The user explicitly agreed to replace bytes that are not valid UTF-8. */
   acceptInvalidUtf8?: boolean
@@ -466,11 +644,24 @@ interface SaveOptions {
   autosave?: boolean
 }
 
-async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean> {
+function save(saveAs = false, options: SaveOptions = {}, target = doc): Promise<boolean> {
+  if (target.saveTask) return target.saveTask.then(ok => ok && !isDirty(target))
+  const task = saveSnapshot(saveAs, options, target)
+  target.saveTask = task
+  void task.finally(() => {
+    if (target.saveTask === task) target.saveTask = undefined
+    for (const [path, owner] of savingPaths) if (owner === target) savingPaths.delete(path)
+  }).catch(() => {})
+  return task
+}
+
+async function saveSnapshot(saveAs: boolean, options: SaveOptions, target: DocState): Promise<boolean> {
+  const doc = target
+  const editor = target.editor
   // Snapshot the document *before* the first await: whatever happens while a
   // dialog or an IPC call is outstanding, this save writes this text to this
   // path and never the text of a document that replaced it.
-  const generation = docGeneration
+  const generation = target.generation
   const text = editor.getText()
   const baseMtimeMs = doc.baseMtimeMs
   const baseHash = doc.baseHash
@@ -481,15 +672,21 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
     const suggested = path ?? (folderRoot ? joinPath(folderRoot, 'Untitled.md') : 'Untitled.md')
     const picked = await api.call('dialog.saveAs', suggested)
     if (!picked) return false
-    path = String(picked)
+    path = await api.call('file.resolve', String(picked)) as string
     saveAs = true
   }
-  if (generation !== docGeneration) return false
+  if (generation !== target.generation || !tabs.items.includes(target)) return false
+  const pathOwner = tabs.find(path)
+  const pendingOwner = savingPaths.get(pathKey(path))
+  if ((pathOwner && pathOwner !== target) || (pendingOwner && pendingOwner !== target)) {
+    ui.toast('That file is already open in another tab. Choose another name.')
+    return false
+  }
 
   // A file that is not valid UTF-8 holds bytes decoding had to replace; never
   // rewrite it in place without an explicit choice.
   if (!saveAs && !options.acceptInvalidUtf8 && !doc.validUtf8 && text !== doc.savedText) {
-    promptInvalidUtf8()
+    promptInvalidUtf8(target)
     return false
   }
 
@@ -506,22 +703,24 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
     acceptInvalidUtf8: options.acceptInvalidUtf8 === true,
     onConflict: options.autosave ? 'report' : 'copy'
   }
+  savingPaths.set(pathKey(path), target)
+  const oldPath = target.path
   const result = (saveAs ? await api.call('file.saveAs', payload) : await api.call('file.save', payload)) as SaveOutcome
-  if (generation !== docGeneration) return false
+  if (generation !== target.generation || !tabs.items.includes(target)) return false
   if (!result || !('ok' in result) || !result.ok) {
     const failure = result as { error?: string; code?: string } | null
     if (failure?.code === 'invalid-utf8') {
-      promptInvalidUtf8()
+      promptInvalidUtf8(target)
       return false
     }
     if (failure?.code === 'conflict') {
       // An autosave found someone else's version: stop writing and ask.
-      await promptExternalChange()
+      await promptExternalChange(target)
       return false
     }
     const error = failure?.error ?? 'unknown error'
     ui.showBanner(`Could not save: ${error}`, [
-      { label: 'Try again', primary: true, onClick: () => void save(saveAs, options) },
+      { label: 'Try again', primary: true, onClick: () => void save(saveAs, options, target) },
       { label: 'Dismiss', onClick: ui.hideBanner }
     ])
     return false
@@ -535,10 +734,12 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
     doc.lineEndings = result.lineEndings
     doc.savedText = text
     doc.externalChange = false
-    setDocContext(doc.path)
-    await api.call('recovery.clear', path)
-    updateTitle()
-    updateStatus()
+    doc.deleted = false
+    editor.setPath(doc.path)
+    if (oldPath) await api.call('file.release', oldPath)
+    persistDraft(target)
+    if (target === tabs.active) { setDocContext(doc.path); updateTitle(); updateStatus() }
+    renderTabs()
     ui.showBanner(`The original file changed on disk. Your version was saved as “${baseName(result.conflictCopy)}”.`, [
       { label: isMac ? 'Show in Finder' : 'Show in Explorer', onClick: () => void api.call('shell.showItemInFolder', result.conflictCopy!) },
       { label: 'Dismiss', onClick: ui.hideBanner }
@@ -554,11 +755,12 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
   doc.lineEndings = result.lineEndings
   doc.savedText = text
   doc.externalChange = false
-  setDocContext(path)
-  void api.call('recovery.clear', path)
-  ui.hideBanner()
-  updateTitle()
-  updateStatus()
+  doc.deleted = false
+  editor.setPath(path)
+  if (oldPath && oldPath !== path) await api.call('file.release', oldPath)
+  persistDraft(target)
+  if (target === tabs.active) { setDocContext(path); ui.hideBanner(); updateTitle(); updateStatus() }
+  renderTabs()
   if (reopened) ui.toast('Saved — the file had been deleted on disk and was created again')
   else if (!result.unchanged) ui.toast('Saved')
   await refreshFolderFiles()
@@ -570,14 +772,15 @@ async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean>
  * not UTF-8. Offer the safe way out (a UTF-8 copy) instead of silently losing
  * the original bytes.
  */
-function promptInvalidUtf8(): void {
+function promptInvalidUtf8(target = doc): void {
+  if (target !== tabs.active) return
   ui.showBanner(
     'This file contains bytes that are not valid UTF-8, so Typing cannot write it back unchanged. Save a UTF-8 copy instead.',
     [
-      { label: 'Save As…', primary: true, onClick: () => void save(true) },
+      { label: 'Save As…', primary: true, onClick: () => void save(true, {}, target) },
       {
         label: 'Overwrite as UTF-8',
-        onClick: () => void save(false, { acceptInvalidUtf8: true })
+        onClick: () => void save(false, { acceptInvalidUtf8: true }, target)
       },
       { label: 'Dismiss', onClick: ui.hideBanner }
     ]
@@ -585,26 +788,30 @@ function promptInvalidUtf8(): void {
 }
 
 /** Ask the user what to do about a file that changed under our feet. */
-async function promptExternalChange(): Promise<void> {
-  doc.externalChange = true
+async function promptExternalChange(target = doc): Promise<void> {
+  target.externalChange = true
+  cancelPendingWrites(target)
+  persistDraft(target)
+  renderTabs()
+  if (target !== doc) return
   updateTitle()
   updateSaveChip()
   ui.showBanner('This file changed on disk while you had unsaved edits.', [
     {
       label: 'Reload from disk',
       onClick: () => {
-        if (doc.path) void openFile(doc.path, { alreadyGuarded: true })
+        if (target.path) void openFile(target.path, { alreadyGuarded: true, target })
       }
     },
     {
       label: 'Keep mine as a copy',
       primary: true,
-      onClick: () => void save(false)
+      onClick: () => void save(false, {}, target)
     },
     {
       label: 'Ignore',
       onClick: () => {
-        doc.externalChange = false
+        target.externalChange = false
         updateTitle()
         updateSaveChip()
         ui.hideBanner()
@@ -621,42 +828,53 @@ async function refreshFolderFiles(): Promise<void> {
 }
 
 async function revertToSaved(): Promise<void> {
-  if (!doc.path) return
+  const target = doc
+  if (!target.path) return
   const ok = await ui.confirmDialog('Revert to Saved', 'Discard your changes and reload the file from disk?', 'Revert')
   if (!ok) return
-  await openFile(doc.path, { alreadyGuarded: true })
+  await openFile(target.path, { alreadyGuarded: true, target })
+  persistDraft(target)
+}
+
+function showDeletedBanner(): void {
+  ui.showBanner('This file was deleted outside Typing. Your text is still in the editor; saving will create the file again.', [
+    { label: 'Dismiss', onClick: ui.hideBanner }
+  ])
 }
 
 async function onExternalChange(path: string): Promise<void> {
-  if (doc.path !== path) return
-  const stat = await api.call('file.stat', path)
-  if (!stat) {
-    // Deleted while open: keep the text in the editor and say what a save does.
-    ui.showBanner('This file was deleted outside Typing. Your text is still in the editor; saving will create the file again.', [
-      { label: 'Dismiss', onClick: ui.hideBanner }
-    ])
+  const target = tabs.find(path)
+  if (!target || target.closing) return
+  // Let our own in-flight write publish its new base before comparing hashes.
+  if (target.saveTask) await target.saveTask
+  if (!tabs.items.includes(target) || target.path !== path) return
+  const generation = target.generation
+  const result = (await api.call('file.read', path)) as FileReadResult & { ok: boolean }
+  if (!tabs.items.includes(target) || generation !== target.generation || target.path !== path) return
+  if (!result.ok) {
+    target.deleted = true
+    cancelPendingWrites(target)
+    renderTabs()
+    if (target === doc) showDeletedBanner()
     return
   }
-  if (!isDirty()) {
-    const result = (await api.call('file.read', path)) as FileReadResult & { ok: boolean }
-    if (result.ok) {
-      const scrollTop = editor.view.scrollDOM.scrollTop
-      setDocument(result.text, {
-        path: result.path,
-        baseMtimeMs: result.mtimeMs,
-        baseHash: result.hash,
-        eol: result.eol,
-        lineEndings: result.lineEndings,
-        bom: result.bom,
-        validUtf8: result.validUtf8
-      })
-      editor.view.scrollDOM.scrollTop = scrollTop
-      if (!result.validUtf8) promptInvalidUtf8()
+  if (result.hash === target.baseHash) return
+  if (!isDirty(target) && !closingWindow) {
+    const view = target.editor.view
+    const scrollTop = view.scrollDOM.scrollTop
+    const selection = view.state.selection.main
+    setDocument(result.text, { ...result, baseMtimeMs: result.mtimeMs, baseHash: result.hash }, target)
+    const length = view.state.doc.length
+    view.dispatch({ selection: { anchor: Math.min(selection.anchor, length), head: Math.min(selection.head, length) } })
+    view.scrollDOM.scrollTop = scrollTop
+    renderTabs()
+    if (target === doc) {
+      if (!result.validUtf8) promptInvalidUtf8(target)
       else ui.toast('Reloaded: the file changed on disk')
     }
     return
   }
-  await promptExternalChange()
+  await promptExternalChange(target)
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +888,14 @@ async function offerRecovery(): Promise<void> {
     name: string
     text: string
     savedAt: number
+    baseHash?: string
+    baseMtimeMs?: number
+    savedText?: string
+    eol?: Eol
+    lineEndings?: string
+    bom?: boolean
+    validUtf8?: boolean
+    sourceMode?: boolean
   }
   const drafts = (await api.call('recovery.list')) as Draft[]
   if (!drafts.length) return
@@ -677,7 +903,7 @@ async function offerRecovery(): Promise<void> {
   const candidates: Draft[] = []
   for (const draft of drafts) {
     const key = draft.key ?? draft.path ?? ''
-    if (draft.savedAt < weekAgo || !draft.text.trim()) {
+    if (draft.savedAt < weekAgo) {
       if (key) await api.call('recovery.clear', key)
       continue
     }
@@ -693,7 +919,7 @@ async function offerRecovery(): Promise<void> {
   }
   if (!candidates.length) return
   candidates.sort((a, b) => b.savedAt - a.savedAt)
-  for (const draft of candidates.slice(0, 2)) {
+  for (const draft of candidates) {
     const when = new Date(draft.savedAt).toLocaleString()
     const ok = await ui.confirmDialog(
       'Recover unsaved work',
@@ -704,27 +930,30 @@ async function offerRecovery(): Promise<void> {
       await api.call('recovery.clear', draft.key ?? draft.path ?? '')
       continue
     }
-    if (draft.path) {
-      const result = (await api.call('file.read', draft.path)) as FileReadResult & { ok: boolean }
-      if (result.ok) {
-        setDocument(result.text, {
-          path: result.path,
-          baseMtimeMs: result.mtimeMs,
-          baseHash: result.hash,
-          eol: result.eol,
-          lineEndings: result.lineEndings,
-          bom: result.bom,
-          validUtf8: result.validUtf8
-        })
-      }
+    const empty = doc.path === null && !doc.touched && !editor.getText() ? doc : null
+    const disk = draft.path ? await api.call('file.read', draft.path) as FileReadResult : null
+    const target = createDocument(disk?.ok ? disk.text : '', {
+      path: draft.path,
+      baseMtimeMs: draft.baseMtimeMs ?? disk?.mtimeMs ?? 0,
+      baseHash: draft.baseHash ?? disk?.hash ?? '',
+      eol: draft.eol ?? disk?.eol ?? '\n', lineEndings: draft.lineEndings ?? disk?.lineEndings ?? '',
+      bom: draft.bom ?? disk?.bom ?? false, validUtf8: draft.validUtf8 ?? disk?.validUtf8 ?? true
+    })
+    if (draft.key && /^[0-9a-f]{16}$/.test(draft.key)) {
+      // Keep the same durable recovery key through another crash.
+      target.id = draft.key
+      target.panel.id = `panel-${target.id}`
+      target.panel.setAttribute('aria-labelledby', `tab-${target.id}`)
     }
-    const previous = editor.getText()
-    editor.setText(draft.text)
-    doc.savedText = draft.path ? previous : ''
-    updateTitle()
-    updateStatus()
+    target.savedText = draft.savedText ?? (disk?.ok ? disk.text : '')
+    target.editor.setText(draft.text)
+    target.sourceMode = draft.sourceMode ?? target.sourceMode
+    target.editor.setSourceMode(target.sourceMode)
+    target.externalChange = Boolean(disk?.ok && target.baseHash && disk.hash !== target.baseHash)
+    if (empty) await disposeTab(empty)
+    activateTab(target)
+    persistDraft(target)
     ui.toast('Recovered unsaved changes — save when ready')
-    if (!draft.path) await api.call('recovery.clear', draft.key ?? '')
   }
 }
 
@@ -912,8 +1141,10 @@ function readFileAsDataUrl(file: File | Blob): Promise<string> {
 }
 
 async function insertImageData(dataUrl: string, suggestedName: string): Promise<void> {
+  const target = doc
+  const generation = target.generation
   const result = await api.call('assets.saveImage', {
-    docPath: doc.path,
+    docPath: target.path,
     dataUrl,
     suggestedName
   })
@@ -923,7 +1154,8 @@ async function insertImageData(dataUrl: string, suggestedName: string): Promise<
     ])
     return
   }
-  fmt.insertImage(editor.view, suggestedName.replace(/\.[a-z]+$/i, ''), result.relative)
+  if (!tabs.items.includes(target) || target.generation !== generation) return
+  fmt.insertImage(target.editor.view, suggestedName.replace(/\.[a-z]+$/i, ''), result.relative)
   ui.toast('Image saved to assets/')
 }
 
@@ -988,7 +1220,8 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
   }
 }
 
-function wireLinks(): void {
+function wireEditorLinks(controller: EditorController): void {
+  const editor = controller
   editor.view.dom.addEventListener('mousedown', (e) => {
     if (!(e.metaKey || e.ctrlKey)) return
     const pos = editor.view.posAtCoords({ x: e.clientX, y: e.clientY })
@@ -1038,6 +1271,10 @@ function wireGlobalKeys(): void {
 }
 
 function wireButtons(): void {
+  $('btn-new-tab').addEventListener('click', () => void newDocument())
+  $('tab-list').addEventListener('wheel', e => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { e.preventDefault(); $('tab-list').scrollLeft += e.deltaY }
+  }, { passive: false })
   $('btn-source').addEventListener('click', () => void toggleSource())
   $('btn-outline').addEventListener('click', () => void setPrefs({ showOutline: !prefs.showOutline }))
   $('btn-sidebar').addEventListener('click', () => {
@@ -1054,7 +1291,7 @@ async function openFolder(): Promise<void> {
 }
 
 async function toggleSource(): Promise<void> {
-  await setPrefs({ sourceMode: !prefs.sourceMode })
+  await setPrefs({ sourceMode: !doc.sourceMode })
   const scrollTop = editor.view.scrollDOM.scrollTop
   editor.view.scrollDOM.scrollTop = scrollTop
   ui.toast(prefs.sourceMode ? 'Source mode' : 'Live preview')
@@ -1065,9 +1302,11 @@ async function toggleSource(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function runCommand(command: string): Promise<void> {
+  if (closingWindow && command !== 'app.close') return
   const view = editor.view
   switch (command) {
     case 'doc.new':
+    case 'tab.new':
       await newDocument()
       break
     case 'doc.open':
@@ -1090,6 +1329,21 @@ async function runCommand(command: string): Promise<void> {
     case 'doc.revert':
       await revertToSaved()
       break
+    case 'tab.close':
+      await closeTab()
+      break
+    case 'tab.next':
+    case 'tab.nextAlt': {
+      const next = tabs.relative(1)
+      if (next) activateTab(next)
+      break
+    }
+    case 'tab.previous':
+    case 'tab.previousAlt': {
+      const previous = tabs.relative(-1)
+      if (previous) activateTab(previous)
+      break
+    }
     case 'app.close':
       await requestClose()
       break
@@ -1257,7 +1511,10 @@ async function runCommand(command: string): Promise<void> {
       await showAppDoc('THIRD_PARTY.md', 'Third-Party Licenses')
       break
     default:
-      if (command.startsWith('format.h') && command.length === 8) {
+      if (command.startsWith('tab.jump')) {
+        const target = tabs.at(Number(command.slice(-1)) - 1)
+        if (target) activateTab(target)
+      } else if (command.startsWith('format.h') && command.length === 8) {
         const level = Number(command.slice(-1))
         fmt.setHeading(view, level)
       } else if (command === 'format.p') {
@@ -1267,10 +1524,32 @@ async function runCommand(command: string): Promise<void> {
   }
 }
 
-/** ⌘W / ⌘Q: the same unsaved-work guard decides, then the window really closes. */
+/** Native window close / quit walks all tabs; cancellation never discards any. */
 async function requestClose(): Promise<void> {
-  if (!(await guardUnsavedWork())) return
-  await api.call('window.close', true)
+  if (closingWindow || guardInFlight) return
+  closingWindow = true
+  let approved = false
+  const checked = new Map<DocState, string>()
+  try {
+    for (const target of tabs.items) cancelPendingWrites(target)
+    for (const target of tabs.items) {
+      if (target.saveTask) await target.saveTask
+      if (!(await guardUnsavedWork(target))) return
+      checked.set(target, target.editor.getText())
+    }
+    // A background change or a test/API edit while a later dialog was open may
+    // not inherit an earlier discard decision.
+    if (tabs.items.some(target => checked.get(target) !== target.editor.getText())) return
+    for (const target of tabs.items) await api.call('recovery.clear', target.id)
+    approved = true
+    await api.call('window.close', true)
+  } finally {
+    closingWindow = false
+    if (!approved) {
+      await api.call('window.cancelClose')
+      for (const target of tabs.items) { scheduleAutosave(target); scheduleDraft(target) }
+    }
+  }
 }
 
 async function showAppDoc(file: string, title: string): Promise<void> {
@@ -1279,16 +1558,18 @@ async function showAppDoc(file: string, title: string): Promise<void> {
 }
 
 async function pickImage(): Promise<void> {
+  const target = doc
+  const generation = target.generation
   const path = await api.call('dialog.pickImage')
   if (!path) return
   const name = baseName(String(path))
   const alt = name.replace(/\.[a-z0-9]+$/i, '')
   // Prefer a relative link when the image lives next to the document; a link
   // written into the document always uses forward slashes, on every platform.
-  const dir = doc.path ? dirName(doc.path) : ''
+  const dir = target.path ? dirName(target.path) : ''
   const relative = dir ? relativePath(dir, String(path)) : null
   const src = relative ?? toPosixPath(String(path))
-  fmt.insertImage(editor.view, alt, src)
+  if (tabs.items.includes(target) && target.generation === generation) fmt.insertImage(target.editor.view, alt, src)
 }
 
 // ---------------------------------------------------------------------------
@@ -1336,6 +1617,11 @@ declare global {
       tableContext: (pos: number) => unknown
       toggleTask: (pos: number) => void
       stats: () => ReturnType<typeof countStats>
+      tabs: () => Array<{ id: string; path: string | null; dirty: boolean; active: boolean; sourceMode: boolean; externalChange: boolean; deleted: boolean }>
+      activate: (index: number) => void
+      closeTab: () => Promise<void>
+      selection: (anchor?: number, head?: number) => { anchor: number; head: number; scroll: number }
+      flushDrafts: () => void
     }
   }
 }
@@ -1363,7 +1649,16 @@ if (api.testMode) {
       const edit = toggleTaskAt(editor.getText(), pos)
       if (edit) editor.apply(edit.changes[0], edit.selection)
     },
-    stats: () => countStats(editor.getText())
+    stats: () => countStats(editor.getText()),
+    tabs: () => tabs.items.map(tab => ({ id: tab.id, path: tab.path, dirty: isDirty(tab), active: tab === doc, sourceMode: tab.sourceMode, externalChange: tab.externalChange, deleted: tab.deleted })),
+    activate: index => { const tab = tabs.items[index]; if (tab) activateTab(tab) },
+    closeTab: () => closeTab(),
+    selection: (anchor, head) => {
+      if (anchor !== undefined) editor.setSelection(anchor, head, false)
+      const sel = editor.view.state.selection.main
+      return { anchor: sel.anchor, head: sel.head, scroll: editor.view.scrollDOM.scrollTop }
+    },
+    flushDrafts: () => tabs.items.forEach(persistDraft)
   }
 }
 

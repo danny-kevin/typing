@@ -22,6 +22,7 @@ import { autoPairExtension } from './auto-pair'
 import { smartPasteExtension } from './smart-paste'
 import { listKeymap } from './list-keys'
 import { currentMatchField, searchHighlightField } from '../search'
+import { editorDocPath } from './widgets'
 
 export interface EditorHooks {
   onChange: () => void
@@ -36,6 +37,7 @@ export interface EditorController {
   setText: (text: string) => void
   getText: () => string
   setSourceMode: (source: boolean) => void
+  setPath: (path: string) => void
   setFocusMode: (on: boolean) => void
   setSpellCheck: (on: boolean) => void
   setAutoPair: (on: boolean) => void
@@ -53,6 +55,8 @@ const historyConf = new Compartment()
 
 export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorController {
   let sourceMode = false
+  let focusMode = false
+  const pathConf = new Compartment()
 
   const updateListener = EditorView.updateListener.of((u) => {
     if (u.docChanged) hooks.onChange()
@@ -64,6 +68,7 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
     doc: '',
     extensions: [
       historyConf.of(history()),
+      pathConf.of(editorDocPath.of('')),
       drawSelection(),
       dropCursor(),
       highlightSpecialChars(),
@@ -130,18 +135,24 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
       view.scrollDOM.scrollTop = 0
     },
     getText: () => view.state.doc.toString(),
+    setPath(path: string) {
+      view.dispatch({ effects: pathConf.reconfigure(editorDocPath.of(path)) })
+    },
     setSourceMode(source: boolean) {
+      if (sourceMode === source) return
       sourceMode = source
       view.dispatch({ effects: previewConf.reconfigure(source ? [] : livePreview) })
       document.documentElement.classList.toggle('source-mode', source)
     },
     setFocusMode(on: boolean) {
+      if (focusMode === on) return
+      focusMode = on
       livePreviewOptions.focusMode = on
       document.documentElement.classList.toggle('focus-mode', on)
       view.dispatch({ effects: previewConf.reconfigure(sourceMode ? [] : livePreview) })
       if (!sourceMode) {
         // Force an immediate decoration rebuild so dimming appears at once.
-        view.dispatch({ selection: { anchor: view.state.selection.main.anchor } })
+        view.dispatch({ selection: view.state.selection })
       }
     },
     setSpellCheck(on: boolean) {

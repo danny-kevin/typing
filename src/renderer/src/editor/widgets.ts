@@ -1,4 +1,8 @@
 import { WidgetType, EditorView } from '@codemirror/view'
+import { Facet } from '@codemirror/state'
+
+/** Asset resolution belongs to the view, including detached background views. */
+export const editorDocPath = Facet.define<string, string>({ combine: values => values[0] ?? '' })
 import katex from 'katex'
 import mermaid from 'mermaid'
 import type { TableModel } from '../../../shared/markdown'
@@ -133,6 +137,8 @@ async function runNextDiagram(): Promise<void> {
   if (!mermaidReady) initMermaid(dark)
   try {
     const { svg } = await mermaid.render(`typing-mermaid-${++mermaidSeq}`, job.code)
+    // Bounded cache: closing many diagram tabs must not retain every source.
+    if (mermaidCache.size >= 64) mermaidCache.delete(mermaidCache.keys().next().value!)
     mermaidCache.set(job.code, svg)
     if (job.element.isConnected) paintDiagram(job.element, svg)
   } catch (err) {
@@ -222,10 +228,11 @@ export class ImageWidget extends WidgetType {
     return other.url === this.url && other.alt === this.alt && other.title === this.title
   }
 
-  override toDOM(): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'cm-image'
-    const src = resolveAssetUrl(this.url)
+    const path = view.state.facet(editorDocPath)
+    const src = resolveAssetTarget(this.url, path ? dirName(path) : '')
     if (!src) {
       wrap.classList.add('cm-image-blocked')
       wrap.textContent = this.url ? `🖼 ${this.alt || this.url} (external image not loaded)` : '🖼 image'
