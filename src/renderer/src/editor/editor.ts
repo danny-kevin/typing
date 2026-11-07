@@ -49,6 +49,7 @@ export interface EditorController {
 }
 
 const previewConf = new Compartment()
+const historyConf = new Compartment()
 
 export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorController {
   let sourceMode = false
@@ -62,7 +63,7 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
   const state = EditorState.create({
     doc: '',
     extensions: [
-      history(),
+      historyConf.of(history()),
       drawSelection(),
       dropCursor(),
       highlightSpecialChars(),
@@ -121,6 +122,11 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
         selection: { anchor: 0 },
         scrollIntoView: false
       })
+      // A new document starts with an empty undo history: ⌘Z must never restore
+      // text from the file that was open a moment ago. Reconfiguring the history
+      // compartment out and back re-initialises its state field.
+      view.dispatch({ effects: historyConf.reconfigure([]) })
+      view.dispatch({ effects: historyConf.reconfigure(history()) })
       view.scrollDOM.scrollTop = 0
     },
     getText: () => view.state.doc.toString(),

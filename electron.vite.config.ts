@@ -1,5 +1,24 @@
 import { defineConfig } from 'electron-vite'
 import { resolve } from 'node:path'
+import type { Plugin } from 'vite'
+
+/**
+ * The renderer's Content-Security-Policy is shipped in index.html and allows no
+ * network origins at all. The dev server needs its own websocket and http origin
+ * for hot reload, so only `electron-vite dev` widens `connect-src`; the packaged
+ * build keeps the strict policy.
+ */
+const DEV_CONNECT_SRC = " ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*"
+
+function devCspPlugin(): Plugin {
+  return {
+    name: 'typing-dev-csp',
+    apply: 'serve',
+    transformIndexHtml(html: string) {
+      return html.replace("connect-src 'self' typing-asset:;", `connect-src 'self' typing-asset:${DEV_CONNECT_SRC};`)
+    }
+  }
+}
 
 export default defineConfig({
   main: {
@@ -22,6 +41,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    plugins: [devCspPlugin()],
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       emptyOutDir: true,

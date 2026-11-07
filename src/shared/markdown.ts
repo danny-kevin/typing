@@ -609,9 +609,13 @@ export function applyTableOp(text: string, pos: number, op: TableOp): Edit | nul
   }
   if (!replaceLines) return null
   const insert = replaceLines.join('\n')
+  const end = ctx.start + insert.length
   return {
     changes: [{ from: ctx.start, to: ctx.end, insert }],
-    selection: { anchor: Math.min(ctx.start + insert.length, ctx.end + insert.length), head: ctx.end + insert.length }
+    // Collapse the caret at the end of the block that was rewritten. A selection
+    // that runs past it would mark the lines after the table as "active", which
+    // renders their live preview as raw source.
+    selection: { anchor: end, head: end }
   }
 }
 

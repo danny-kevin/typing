@@ -121,6 +121,21 @@ describe('tables', () => {
     expect(parseTable(result.split('\n'))!.aligns[0]).toBe('center')
   })
 
+  it('keeps the caret inside the block it rewrote', () => {
+    const doc = `${table}\n\n- [ ] task after the table\n`
+    const edit = applyTableOp(doc, doc.indexOf('| a'), { kind: 'addRowBelow' })!
+    const range = edit.changes[0]
+    const newEnd = range.from + range.insert.length
+    // Collapsed, and exactly at the end of the rewritten block: the old code
+    // returned `ctx.end + insert.length`, which ran past the table and selected
+    // the lines after it.
+    expect(edit.selection.anchor).toBe(newEnd)
+    expect(edit.selection.head).toBe(newEnd)
+    const after = applyChanges(doc, edit.changes)
+    expect(tableContextAt(after, edit.selection.head)).not.toBeNull()
+    expect(after.slice(edit.selection.head)).toBe('\n\n- [ ] task after the table\n')
+  })
+
   it('only replaces the table block, leaving neighbours untouched', () => {
     const doc = `before\n\n${table}\n\nafter\n`
     const edit = applyTableOp(doc, doc.indexOf('| a'), { kind: 'addRowBelow' })!

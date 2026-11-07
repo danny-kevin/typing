@@ -3,6 +3,7 @@ import 'katex/dist/katex.min.css'
 import { EditorView } from '@codemirror/view'
 import type { Prefs, FileReadResult, SaveOutcome } from '../../shared/types'
 import { DEFAULT_PREFS } from '../../shared/types'
+import type { Eol } from '../../shared/doc'
 import {
   countStats,
   extractOutline,
@@ -41,13 +42,36 @@ const api = (window as unknown as { typing: Api }).typing
 interface DocState {
   path: string | null
   baseMtimeMs: number
-  eol: '\n' | '\r\n'
+  /** sha256 of the bytes on disk the last time we read or wrote them. */
+  baseHash: string
+  eol: Eol
+  /** Ending of each line on disk: 'c' CRLF, 'l' LF, 'r' lone CR. */
+  lineEndings: string
   bom: boolean
+  /** False when the file holds bytes that only decode with replacement chars. */
+  validUtf8: boolean
   savedText: string
   externalChange: boolean
 }
 
-const doc: DocState = { path: null, baseMtimeMs: 0, eol: '\n', bom: false, savedText: '', externalChange: false }
+const doc: DocState = {
+  path: null,
+  baseMtimeMs: 0,
+  baseHash: '',
+  eol: '\n',
+  lineEndings: '',
+  bom: false,
+  validUtf8: true,
+  savedText: '',
+  externalChange: false
+}
+
+/**
+ * Bumped every time a different document is installed in the editor. An async
+ * save compares it before it writes and before it adopts a result, so a save
+ * started for one file can never land in (or relabel) another one.
+ */
+let docGeneration = 0
 
 let prefs: Prefs = { ...DEFAULT_PREFS }
 let editor: EditorController
@@ -197,9 +221,15 @@ function scheduleOutline(): void {
 
 function scheduleAutosave(): void {
   if (!prefs.autoSave || !doc.path) return
+  // A file whose bytes are not valid UTF-8 must never be rewritten in place by
+  // a background write; the user has to choose Save As explicitly.
+  if (!doc.validUtf8) return
+  // While a change on disk is unresolved, autosave would quietly rewrite the
+  // file as a conflict copy; wait for the user's answer instead.
+  if (doc.externalChange) return
   if (autosaveTimer) window.clearTimeout(autosaveTimer)
   autosaveTimer = window.setTimeout(() => {
-    if (doc.path && isDirty()) void save(false)
+    if (doc.path && isDirty()) void save(false, { autosave: true })
   }, prefs.autoSaveMs)
 }
 
@@ -214,6 +244,14 @@ function scheduleDraft(): void {
       baseMtimeMs: doc.baseMtimeMs
     })
   }, 900)
+}
+
+/** Drop the writes that were scheduled for the document we are leaving. */
+function cancelPendingWrites(): void {
+  if (autosaveTimer) window.clearTimeout(autosaveTimer)
+  if (draftTimer) window.clearTimeout(draftTimer)
+  autosaveTimer = 0
+  draftTimer = 0
 }
 
 function updateTitle(): void {
@@ -268,11 +306,20 @@ function updateModeChip(): void {
   chip.textContent = bits.join(' · ')
 }
 
-function setDocument(text: string, meta: Partial<DocState> & { path: string | null }): void {
+function setDocument(
+  text: string,
+  meta: Partial<DocState> & { path: string | null }
+): void {
+  docGeneration++
+  cancelPendingWrites()
+  resetFindState()
   doc.path = meta.path
   doc.baseMtimeMs = meta.baseMtimeMs ?? 0
+  doc.baseHash = meta.baseHash ?? ''
   doc.eol = meta.eol ?? '\n'
+  doc.lineEndings = meta.lineEndings ?? ''
   doc.bom = meta.bom ?? false
+  doc.validUtf8 = meta.validUtf8 ?? true
   doc.externalChange = false
   doc.savedText = text
   setDocContext(meta.path ?? '')
@@ -288,25 +335,75 @@ function setDocument(text: string, meta: Partial<DocState> & { path: string | nu
   editor.setSelection(0, 0, false)
 }
 
-function newDocument(): void {
-  if (isDirty() && doc.path) void save(false)
-  setDocument('', { path: null, baseMtimeMs: 0, eol: '\n', bom: false })
-  ui.toast('New document')
+/** Search results belong to one document; a switch must not keep them. */
+function resetFindState(): void {
+  findState = { matches: [], index: -1, replaceMode: findState.replaceMode }
+  editor.view.dispatch({ effects: [setSearchHighlights.of([]), setCurrentMatch.of(null)] })
+  const count = $('find-count')
+  if (count) count.textContent = ''
 }
 
-async function openFile(path: string): Promise<void> {
-  if (isDirty() && doc.path) await save(false)
+/**
+ * The one gate every document switch goes through (new, open, quick open, file
+ * tree, recents, drag and drop, an external open request, close and quit).
+ *
+ * Returns true only when it is safe to replace the editor's contents: the save
+ * the user asked for finished, or the user explicitly chose to discard. A failed
+ * save, a cancelled Save As, or an unresolved conflict with another writer all
+ * return false so the switch is abandoned and the text stays put.
+ *
+ * Kept deliberately small and side-effect free: the tab support that follows is
+ * expected to call this same function.
+ */
+let guardInFlight = false
+
+async function guardUnsavedWork(): Promise<boolean> {
+  if (!isDirty()) return true
+  if (guardInFlight) return false
+  const name = doc.path ? (doc.path.split('/').pop() ?? 'Untitled') : 'Untitled'
+  guardInFlight = true
+  try {
+    const choice = await ui.choiceDialog(
+      'Unsaved changes',
+      `“${name}” has changes that are not saved.`,
+      [
+        { label: 'Cancel', value: 'cancel' },
+        { label: "Don't Save", value: 'discard' },
+        { label: 'Save', value: 'save', primary: true }
+      ]
+    )
+    if (choice === 'save') return await save(false)
+    return choice === 'discard'
+  } finally {
+    guardInFlight = false
+  }
+}
+
+async function newDocument(): Promise<boolean> {
+  if (!(await guardUnsavedWork())) return false
+  setDocument('', { path: null, baseMtimeMs: 0, baseHash: '', eol: '\n', lineEndings: '', bom: false })
+  ui.toast('New document')
+  return true
+}
+
+async function openFile(path: string, options: { alreadyGuarded?: boolean } = {}): Promise<boolean> {
+  if (!options.alreadyGuarded && !(await guardUnsavedWork())) return false
   const result = (await api.call('file.read', path)) as FileReadResult & { ok: boolean; error?: string }
   if (!result.ok) {
     ui.showBanner(`Could not open ${path}: ${result.error}`, [{ label: 'Dismiss', onClick: ui.hideBanner }])
-    return
+    return false
   }
   setDocument(result.text, {
     path: result.path,
     baseMtimeMs: result.mtimeMs,
+    baseHash: result.hash,
     eol: result.eol,
-    bom: result.bom
+    lineEndings: result.lineEndings,
+    bom: result.bom,
+    validUtf8: result.validUtf8
   })
+  if (!result.validUtf8) promptInvalidUtf8()
+  return true
 }
 
 async function openFileDialog(): Promise<void> {
@@ -329,41 +426,83 @@ async function loadFolder(dir: string, persist = true): Promise<void> {
   if (doc.path) fileTree.select(doc.path)
 }
 
-async function save(saveAs = false, keepMine = false): Promise<boolean> {
+interface SaveOptions {
+  /** The user explicitly agreed to replace bytes that are not valid UTF-8. */
+  acceptInvalidUtf8?: boolean
+  /**
+   * A background write. It never renames the document into a conflict copy:
+   * if someone else has the file, it asks the user instead.
+   */
+  autosave?: boolean
+}
+
+async function save(saveAs = false, options: SaveOptions = {}): Promise<boolean> {
+  // Snapshot the document *before* the first await: whatever happens while a
+  // dialog or an IPC call is outstanding, this save writes this text to this
+  // path and never the text of a document that replaced it.
+  const generation = docGeneration
+  const text = editor.getText()
+  const baseMtimeMs = doc.baseMtimeMs
+  const baseHash = doc.baseHash
+  const { eol, bom } = doc
+
   let path = doc.path
   if (!path || saveAs) {
     const suggested = path ?? (folderRoot ? `${folderRoot}/Untitled.md` : 'Untitled.md')
-    path = await api.call('dialog.saveAs', suggested)
-    if (!path) return false
+    const picked = await api.call('dialog.saveAs', suggested)
+    if (!picked) return false
+    path = String(picked)
+    saveAs = true
+  }
+  if (generation !== docGeneration) return false
+
+  // A file that is not valid UTF-8 holds bytes decoding had to replace; never
+  // rewrite it in place without an explicit choice.
+  if (!saveAs && !options.acceptInvalidUtf8 && !doc.validUtf8 && text !== doc.savedText) {
+    promptInvalidUtf8()
+    return false
   }
 
-  // Refuse to write over a file that someone else changed since we read it.
-  if (!saveAs && !keepMine && doc.baseMtimeMs) {
-    const stat = await api.call('file.stat', path)
-    if (stat && Math.abs(stat.mtimeMs - doc.baseMtimeMs) > 1) {
+  // `force` is only used when writing to a path the user just chose; an in-place
+  // save always lets the main process protect a file that changed underneath us.
+  const payload = {
+    path,
+    text,
+    baseMtimeMs,
+    baseHash,
+    eol,
+    bom,
+    force: saveAs,
+    acceptInvalidUtf8: options.acceptInvalidUtf8 === true,
+    onConflict: options.autosave ? 'report' : 'copy'
+  }
+  const result = (saveAs ? await api.call('file.saveAs', payload) : await api.call('file.save', payload)) as SaveOutcome
+  if (generation !== docGeneration) return false
+  if (!result || !('ok' in result) || !result.ok) {
+    const failure = result as { error?: string; code?: string } | null
+    if (failure?.code === 'invalid-utf8') {
+      promptInvalidUtf8()
+      return false
+    }
+    if (failure?.code === 'conflict') {
+      // An autosave found someone else's version: stop writing and ask.
       await promptExternalChange()
       return false
     }
-  }
-
-  const text = editor.getText()
-  // `force` is only used when writing to a brand new path; an in-place save
-  // always lets the main process protect a file that changed underneath us.
-  const payload = { path, text, baseMtimeMs: doc.baseMtimeMs, eol: doc.eol, bom: doc.bom, force: saveAs }
-  const result = (saveAs ? await api.call('file.saveAs', payload) : await api.call('file.save', payload)) as SaveOutcome
-  if (!result || !('ok' in result) || !result.ok) {
-    const error = (result as { error?: string })?.error ?? 'unknown error'
+    const error = failure?.error ?? 'unknown error'
     ui.showBanner(`Could not save: ${error}`, [
-      { label: 'Try again', primary: true, onClick: () => void save(saveAs, keepMine) },
+      { label: 'Try again', primary: true, onClick: () => void save(saveAs, options) },
       { label: 'Dismiss', onClick: ui.hideBanner }
     ])
     return false
   }
+  const reopened = result.recreated === true
   if (result.conflictCopy) {
     // The main process protected the file on disk; adopt the copy we just wrote.
-    const copyStat = await api.call('file.stat', result.conflictCopy)
     doc.path = result.conflictCopy
-    doc.baseMtimeMs = copyStat?.mtimeMs ?? Date.now()
+    doc.baseMtimeMs = result.mtimeMs
+    doc.baseHash = result.hash
+    doc.lineEndings = result.lineEndings
     doc.savedText = text
     doc.externalChange = false
     setDocContext(doc.path)
@@ -375,11 +514,14 @@ async function save(saveAs = false, keepMine = false): Promise<boolean> {
       { label: 'Dismiss', onClick: ui.hideBanner }
     ])
     await refreshFolderFiles()
-    return true
+    // Not a save in place: anything that was waiting on this result (a close, a
+    // document switch) stays where it is until the user has seen the copy.
+    return false
   }
-  const stat = await api.call('file.stat', path)
   doc.path = path
-  doc.baseMtimeMs = stat?.mtimeMs ?? Date.now()
+  doc.baseMtimeMs = result.mtimeMs
+  doc.baseHash = result.hash
+  doc.lineEndings = result.lineEndings
   doc.savedText = text
   doc.externalChange = false
   setDocContext(path)
@@ -387,9 +529,29 @@ async function save(saveAs = false, keepMine = false): Promise<boolean> {
   ui.hideBanner()
   updateTitle()
   updateStatus()
-  if (!result.unchanged) ui.toast('Saved')
+  if (reopened) ui.toast('Saved — the file had been deleted on disk and was created again')
+  else if (!result.unchanged) ui.toast('Saved')
   await refreshFolderFiles()
   return true
+}
+
+/**
+ * The file cannot be written back byte-for-byte because it holds bytes that are
+ * not UTF-8. Offer the safe way out (a UTF-8 copy) instead of silently losing
+ * the original bytes.
+ */
+function promptInvalidUtf8(): void {
+  ui.showBanner(
+    'This file contains bytes that are not valid UTF-8, so Typing cannot write it back unchanged. Save a UTF-8 copy instead.',
+    [
+      { label: 'Save As…', primary: true, onClick: () => void save(true) },
+      {
+        label: 'Overwrite as UTF-8',
+        onClick: () => void save(false, { acceptInvalidUtf8: true })
+      },
+      { label: 'Dismiss', onClick: ui.hideBanner }
+    ]
+  )
 }
 
 /** Ask the user what to do about a file that changed under our feet. */
@@ -401,13 +563,13 @@ async function promptExternalChange(): Promise<void> {
     {
       label: 'Reload from disk',
       onClick: () => {
-        if (doc.path) void openFile(doc.path)
+        if (doc.path) void openFile(doc.path, { alreadyGuarded: true })
       }
     },
     {
       label: 'Keep mine as a copy',
       primary: true,
-      onClick: () => void save(false, true)
+      onClick: () => void save(false)
     },
     {
       label: 'Ignore',
@@ -432,11 +594,19 @@ async function revertToSaved(): Promise<void> {
   if (!doc.path) return
   const ok = await ui.confirmDialog('Revert to Saved', 'Discard your changes and reload the file from disk?', 'Revert')
   if (!ok) return
-  await openFile(doc.path)
+  await openFile(doc.path, { alreadyGuarded: true })
 }
 
 async function onExternalChange(path: string): Promise<void> {
   if (doc.path !== path) return
+  const stat = await api.call('file.stat', path)
+  if (!stat) {
+    // Deleted while open: keep the text in the editor and say what a save does.
+    ui.showBanner('This file was deleted outside Typing. Your text is still in the editor; saving will create the file again.', [
+      { label: 'Dismiss', onClick: ui.hideBanner }
+    ])
+    return
+  }
   if (!isDirty()) {
     const result = (await api.call('file.read', path)) as FileReadResult & { ok: boolean }
     if (result.ok) {
@@ -444,11 +614,15 @@ async function onExternalChange(path: string): Promise<void> {
       setDocument(result.text, {
         path: result.path,
         baseMtimeMs: result.mtimeMs,
+        baseHash: result.hash,
         eol: result.eol,
-        bom: result.bom
+        lineEndings: result.lineEndings,
+        bom: result.bom,
+        validUtf8: result.validUtf8
       })
       editor.view.scrollDOM.scrollTop = scrollTop
-      ui.toast('Reloaded: the file changed on disk')
+      if (!result.validUtf8) promptInvalidUtf8()
+      else ui.toast('Reloaded: the file changed on disk')
     }
     return
   }
@@ -506,8 +680,11 @@ async function offerRecovery(): Promise<void> {
         setDocument(result.text, {
           path: result.path,
           baseMtimeMs: result.mtimeMs,
+          baseHash: result.hash,
           eol: result.eol,
-          bom: result.bom
+          lineEndings: result.lineEndings,
+          bom: result.bom,
+          validUtf8: result.validUtf8
         })
       }
     }
@@ -745,6 +922,8 @@ function wireDragAndDrop(): void {
       if (file.type.startsWith('image/')) {
         await insertImageData(await readFileAsDataUrl(file), file.name)
       } else if (/\.(md|markdown|mdown|mkd|mdx|txt)$/i.test(path)) {
+        // Dropping a file into the window is another way of leaving the current
+        // document, so it goes through the same guard.
         await openFile(path)
       }
     }
@@ -856,7 +1035,7 @@ async function runCommand(command: string): Promise<void> {
   const view = editor.view
   switch (command) {
     case 'doc.new':
-      newDocument()
+      await newDocument()
       break
     case 'doc.open':
       await openFileDialog()
@@ -1055,26 +1234,9 @@ async function runCommand(command: string): Promise<void> {
   }
 }
 
-/** ⌘W / ⌘Q: save, discard or cancel, then actually close the window. */
+/** ⌘W / ⌘Q: the same unsaved-work guard decides, then the window really closes. */
 async function requestClose(): Promise<void> {
-  if (!isDirty()) {
-    await api.call('window.close', true)
-    return
-  }
-  const choice = await ui.choiceDialog(
-    'Unsaved changes',
-    `“${doc.path ? doc.path.split('/').pop() : 'Untitled'}” has changes that are not saved.`,
-    [
-      { label: 'Cancel', value: 'cancel' },
-      { label: 'Discard', value: 'discard' },
-      { label: 'Save', value: 'save', primary: true }
-    ]
-  )
-  if (choice === 'cancel' || !choice) return
-  if (choice === 'save') {
-    const ok = await save(false)
-    if (!ok) return
-  }
+  if (!(await guardUnsavedWork())) return
   await api.call('window.close', true)
 }
 
@@ -1126,12 +1288,15 @@ async function exportPdf(): Promise<void> {
 declare global {
   interface Window {
     __typingTest?: {
-      openFile: (path: string) => Promise<void>
+      openFile: (path: string) => Promise<boolean>
+      newDocument: () => Promise<boolean>
+      command: (command: string) => Promise<void>
       getText: () => string
       save: () => Promise<boolean>
       insert: (text: string) => void
       isDirty: () => boolean
       path: () => string | null
+      state: () => { path: string | null; baseHash: string; eol: Eol; lineEndings: string; validUtf8: boolean }
       focus: () => void
       tableContext: (pos: number) => unknown
       toggleTask: (pos: number) => void
@@ -1142,12 +1307,21 @@ declare global {
 
 if (api.testMode) {
   window.__typingTest = {
-    openFile: async (path: string) => openFile(path),
+    openFile: (path: string) => openFile(path),
+    newDocument: () => newDocument(),
+    command: (command: string) => runCommand(command),
     getText: () => editor.getText(),
     save: () => save(false),
     insert: (text: string) => fmt.insertText(editor.view, text),
     isDirty: () => isDirty(),
     path: () => doc.path,
+    state: () => ({
+      path: doc.path,
+      baseHash: doc.baseHash,
+      eol: doc.eol,
+      lineEndings: doc.lineEndings,
+      validUtf8: doc.validUtf8
+    }),
     focus: () => editor.focus(),
     tableContext: (pos: number) => tableContextAt(editor.getText(), pos),
     toggleTask: (pos: number) => {

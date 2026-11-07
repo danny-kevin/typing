@@ -5,6 +5,10 @@
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
+import type { Eol } from './doc'
+
+export type { Eol }
+
 export interface Prefs {
   theme: ThemeMode
   fontFamily: string
@@ -49,10 +53,16 @@ export interface FileReadResult {
   size: number
   /** Last modification time, ms since epoch. */
   mtimeMs: number
+  /** sha256 of the bytes on disk; the identity a save has to match. */
+  hash: string
   /** Byte order mark present in the file; re-added verbatim on save. */
   bom: boolean
-  /** Newline convention of the file; re-applied verbatim on save. */
-  eol: '\n' | '\r\n'
+  /** Newline convention of the file; used for lines the user adds. */
+  eol: Eol
+  /** Ending of every line on disk: 'c' CRLF, 'l' LF, 'r' lone CR. */
+  lineEndings: string
+  /** False when the bytes only decode with replacement characters. */
+  validUtf8: boolean
 }
 
 export interface FileError {
@@ -68,10 +78,16 @@ export interface SaveResult {
   path: string
   mtimeMs: number
   size: number
+  /** sha256 of the bytes now on disk. */
+  hash: string
+  /** Ending of every line written: 'c' CRLF, 'l' LF, 'r' lone CR. */
+  lineEndings: string
   /** True when the file already differed on disk and we wrote a conflict copy instead. */
   conflictCopy?: string
   /** True when the on-disk bytes already matched; nothing was written. */
   unchanged?: boolean
+  /** True when the file had been deleted outside Typing and this save recreated it. */
+  recreated?: boolean
 }
 
 export type SaveOutcome = SaveResult | FileError

@@ -1,10 +1,11 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell, protocol, net, nativeTheme, clipboard, Notification } from 'electron'
 import { join, dirname, basename, resolve, relative, sep } from 'node:path'
 import { createHash } from 'node:crypto'
-import { promises as fs, watchFile, unwatchFile, existsSync, statSync } from 'node:fs'
+import { promises as fs, watchFile, unwatchFile, existsSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
-import { decodeDoc, encodeDoc, bytesEqual } from '../shared/doc'
+import { decodeDoc } from '../shared/doc'
+import { writeDocument, hashBytes, type SaveRequest } from './save-doc'
 import { DEFAULT_PREFS, type Prefs, type DirEntry, type RecentFile } from '../shared/types'
 import { buildMenu } from './menu'
 
@@ -32,7 +33,7 @@ let quitRequested = false
 /** Directories that `typing-asset://` may serve from (document folders we opened). */
 const assetRoots = new Set<string>()
 /** Files currently open in the window, watched for external modification. */
-const watched = new Map<string, { mtimeMs: number }>()
+const watched = new Map<string, { mtimeMs: number; size: number }>()
 
 // ---------------------------------------------------------------------------
 // Preferences / recents persistence
@@ -70,16 +71,6 @@ async function getPrefs(): Promise<Prefs> {
 // File helpers
 // ---------------------------------------------------------------------------
 
-interface SavePayload {
-  path: string
-  text: string
-  baseMtimeMs?: number
-  eol?: '\n' | '\r\n'
-  bom?: boolean
-  /** Write even if the file changed on disk (used after an explicit user choice). */
-  force?: boolean
-}
-
 async function statOrNull(path: string): Promise<{ mtimeMs: number; size: number } | null> {
   try {
     const st = await fs.stat(path)
@@ -90,35 +81,19 @@ async function statOrNull(path: string): Promise<{ mtimeMs: number; size: number
   }
 }
 
-async function atomicWrite(path: string, bytes: Uint8Array): Promise<{ mtimeMs: number; size: number }> {
-  const dir = dirname(path)
-  await fs.mkdir(dir, { recursive: true })
-  const tmp = join(dir, `.${basename(path)}.typing-tmp-${process.pid}-${Date.now()}`)
-  await fs.writeFile(tmp, bytes)
-  let mode: number | undefined
+/**
+ * Remember a directory as a source of `typing-asset://` files. The path is
+ * resolved through every symlink first, and the protocol handler resolves the
+ * requested path the same way, so a symlink inside an opened folder cannot read
+ * a file outside it.
+ */
+async function addAssetRoot(dir: string): Promise<void> {
+  const abs = resolve(dir)
   try {
-    mode = (await fs.stat(path)).mode
+    assetRoots.add(await fs.realpath(abs))
   } catch {
-    mode = undefined
+    assetRoots.add(abs)
   }
-  if (mode !== undefined) await fs.chmod(tmp, mode)
-  try {
-    await fs.rename(tmp, path)
-  } catch (err) {
-    await fs.rm(tmp, { force: true }).catch(() => {})
-    throw err
-  }
-  const st = await fs.stat(path)
-  return { mtimeMs: st.mtimeMs, size: st.size }
-}
-
-function conflictCopyName(path: string): string {
-  const d = new Date()
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  const ext = path.endsWith('.md') ? '.md' : ''
-  const base = ext ? path.slice(0, -ext.length) : path
-  return `${base} (conflict ${stamp})${ext}`
 }
 
 async function readFileForEditor(path: string): Promise<unknown> {
@@ -126,9 +101,9 @@ async function readFileForEditor(path: string): Promise<unknown> {
   try {
     const bytes = new Uint8Array(await fs.readFile(abs))
     const doc = decodeDoc(bytes)
-    assetRoots.add(dirname(abs))
+    await addAssetRoot(dirname(abs))
     const st = await fs.stat(abs)
-    watchDocument(abs, st.mtimeMs)
+    watchDocument(abs, st.mtimeMs, st.size)
     const recents = await readJson<{ items: RecentFile[] }>(recentsPath(), { items: [] })
     const items = [
       { path: abs, name: basename(abs), openedAt: Date.now() },
@@ -141,8 +116,10 @@ async function readFileForEditor(path: string): Promise<unknown> {
       text: doc.text,
       size: bytes.length,
       mtimeMs: st.mtimeMs,
+      hash: hashBytes(bytes),
       bom: doc.bom,
       eol: doc.eol,
+      lineEndings: doc.lineEndings,
       validUtf8: doc.validUtf8
     }
   } catch (err) {
@@ -150,16 +127,20 @@ async function readFileForEditor(path: string): Promise<unknown> {
   }
 }
 
-function watchDocument(path: string, mtimeMs: number): void {
-  if (watched.has(path)) return
+function watchDocument(path: string, mtimeMs: number, size: number): void {
+  if (watched.has(path)) {
+    watched.set(path, { mtimeMs, size })
+    return
+  }
   // Only the document in the editor needs change notifications.
   for (const other of [...watched.keys()]) if (other !== path) unwatchDocument(other)
-  watched.set(path, { mtimeMs })
+  watched.set(path, { mtimeMs, size })
   watchFile(path, { interval: 1500 }, async (curr) => {
     const known = watched.get(path)
     if (!known) return
-    if (curr.mtimeMs !== known.mtimeMs) {
+    if (curr.mtimeMs !== known.mtimeMs || curr.size !== known.size) {
       known.mtimeMs = curr.mtimeMs
+      known.size = curr.size
       mainWindow?.webContents.send('typing:event', 'file:external-change', { path, mtimeMs: curr.mtimeMs })
     }
   })
@@ -210,7 +191,7 @@ const handlers: Record<string, Handler> = {
     const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || !result.filePaths.length) return null
     const dir = result.filePaths[0]
-    assetRoots.add(resolve(dir))
+    await addAssetRoot(dir)
     return dir
   },
   async 'dialog.pickImage'() {
@@ -222,6 +203,11 @@ const handlers: Record<string, Handler> = {
     return result.filePaths[0]
   },
   async 'dialog.saveAs'([suggested]) {
+    // Test seam: the automated suite cannot drive a native save panel, so with
+    // TYPING_TEST=1 it can script the answer through a file it controls
+    // (empty or "canceled" = the user cancelled). Inert without the env vars.
+    const scripted = await scriptedSaveAs()
+    if (scripted !== undefined) return scripted
     const result = await dialog.showSaveDialog(mainWindow!, {
       defaultPath: suggested || undefined,
       filters: [{ name: 'Markdown', extensions: ['md'] }]
@@ -239,16 +225,16 @@ const handlers: Record<string, Handler> = {
     return existsSync(String(path))
   },
   async 'file.save'([payload]) {
-    return saveDocument(payload as SavePayload)
+    return saveDocument(payload as SaveRequest)
   },
   async 'file.saveAs'([payload]) {
-    const p = payload as SavePayload
-    assetRoots.add(dirname(resolve(p.path)))
+    const p = payload as SaveRequest
+    await addAssetRoot(dirname(resolve(p.path)))
     return saveDocument({ ...p, force: true })
   },
   async 'dir.list'([path]) {
     const dir = resolve(String(path))
-    assetRoots.add(dir)
+    await addAssetRoot(dir)
     const entries = await fs.readdir(dir, { withFileTypes: true })
     const out: DirEntry[] = []
     for (const e of entries) {
@@ -261,7 +247,7 @@ const handlers: Record<string, Handler> = {
   },
   async 'dir.walk'([path, limit]) {
     const root = resolve(String(path))
-    assetRoots.add(root)
+    await addAssetRoot(root)
     const max = Number(limit) || 4000
     const out: string[] = []
     const walk = async (dir: string, depth: number): Promise<void> => {
@@ -328,7 +314,7 @@ const handlers: Record<string, Handler> = {
     const baseDir = p.docPath ? dirname(p.docPath) : (await getPrefs()).lastFolder
     if (!baseDir) return { ok: false, error: 'Save the document first, then paste images.' }
     const assetsDir = join(baseDir, 'assets')
-    assetRoots.add(baseDir)
+    await addAssetRoot(baseDir)
     await fs.mkdir(assetsDir, { recursive: true })
     const m = /^data:(image\/([a-zA-Z0-9.+-]+));base64,(.*)$/s.exec(p.dataUrl)
     if (!m) return { ok: false, error: 'Unsupported image data' }
@@ -482,40 +468,23 @@ const handlers: Record<string, Handler> = {
   }
 }
 
-async function saveDocument(p: SavePayload): Promise<unknown> {
-  const abs = resolve(p.path)
-  try {
-    const existing = await fs.readFile(abs).catch(() => null)
-    const stat = existing ? await fs.stat(abs) : null
-    const doc = decodeDoc(existing ?? new Uint8Array())
-    const bytes = encodeDoc({
-      text: p.text,
-      eol: p.eol ?? doc.eol,
-      bom: p.bom ?? doc.bom,
-      validUtf8: true
-    })
-    if (existing && bytesEqual(bytes, new Uint8Array(existing))) {
-      return { ok: true, path: abs, mtimeMs: stat?.mtimeMs ?? Date.now(), size: bytes.length, unchanged: true }
-    }
-    // Never overwrite someone else's newer version without the caller asking.
-    if (existing && p.baseMtimeMs && stat && Math.abs(stat.mtimeMs - p.baseMtimeMs) > 1 && !p.force) {
-      const copy = conflictCopyName(abs)
-      await atomicWrite(copy, bytes)
-      return {
-        ok: true,
-        path: abs,
-        conflictCopy: copy,
-        mtimeMs: p.baseMtimeMs,
-        size: bytes.length
-      }
-    }
-    const result = await atomicWrite(abs, bytes)
-    watchDocument(abs, result.mtimeMs)
-    return { ok: true, path: abs, ...result }
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException
-    return { ok: false, error: e.message, code: e.code }
+async function saveDocument(p: SaveRequest): Promise<unknown> {
+  const result = await writeDocument(p)
+  if (result.ok) {
+    if (result.conflictCopy) watchDocument(result.conflictCopy, result.mtimeMs, result.size)
+    else watchDocument(result.path, result.mtimeMs, result.size)
   }
+  return result
+}
+
+/** See `dialog.saveAs`: scripted answer for the automated suite only. */
+async function scriptedSaveAs(): Promise<string | null | undefined> {
+  if (process.env.TYPING_TEST !== '1') return undefined
+  const file = process.env.TYPING_TEST_SAVE_AS_FILE
+  if (!file) return undefined
+  const raw = await fs.readFile(file, 'utf8').catch(() => '')
+  const value = raw.trim()
+  return value && value !== 'canceled' ? value : null
 }
 
 // ---------------------------------------------------------------------------
@@ -547,7 +516,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      spellcheck: false,
+      spellcheck: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
       experimentalFeatures: false
@@ -614,7 +583,7 @@ function fileFromArgv(argv: string[]): string | null {
 function openPathFromOutside(path: string): void {
   try {
     if (existsSync(path) && require('node:fs').statSync(path).isDirectory()) {
-      assetRoots.add(resolve(path))
+      void addAssetRoot(path)
       mainWindow?.webContents.send('typing:event', 'folder:open-request', { path: resolve(path) })
       return
     }
@@ -643,7 +612,10 @@ if (!gotLock) {
       try {
         const url = new URL(request.url)
         const raw = decodeURIComponent(url.pathname.replace(/^\//, ''))
-        const abs = resolve(raw)
+        // Resolve both sides through symlinks: a link inside an opened folder
+        // must not become a way to read a file outside it.
+        const abs = await fs.realpath(resolve(raw)).catch(() => null)
+        if (!abs) return new Response('forbidden', { status: 403 })
         const allowed = [...assetRoots].some((root) => abs === root || abs.startsWith(root + sep))
         if (!allowed) return new Response('forbidden', { status: 403 })
         const upstream = await net.fetch(pathToFileURL(abs).toString())
