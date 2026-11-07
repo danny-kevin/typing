@@ -17,9 +17,22 @@ database: a document is the file you opened.
 | Revert to saved | File ▸ Revert to Saved |
 
 Saving is quiet: if the bytes on disk already match the document, nothing is
-written at all (the file's modification time stays put). Autosave is on by
-default and writes shortly after you stop typing; you can turn it off in
-Preferences.
+written at all (the file's modification time stays put, and a file that mixes
+CRLF and LF line endings keeps both). Autosave is on by default and writes
+shortly after you stop typing; you can turn it off in Preferences.
+
+Leaving a document never happens silently. New, open, open recent, quick open,
+the folder tree, a file dropped on the window, a file opened from the Finder or
+the Dock, closing the window and quitting all ask the same question when there
+are unsaved changes: **Save**, **Don't Save** or **Cancel**. On an untitled
+draft, Save asks where to put it first. If the save cannot finish — the disk
+refuses it, you cancel the Save As panel, or another program has the file open
+and changed it — you stay in the document with your text exactly as it was.
+
+A file whose bytes are not valid UTF-8 is opened as text with replacement
+characters, and Typing refuses to write it back in place: a banner offers
+**Save As…** for a UTF-8 copy, or **Overwrite as UTF-8** if you really mean to
+replace those bytes.
 
 If the file is changed by another program while you have unsaved edits, Typing
 shows a prompt instead of overwriting anything:
@@ -31,7 +44,10 @@ shows a prompt instead of overwriting anything:
 - **Ignore** — keep typing; you will be asked again on the next save.
 
 If the file changes while you have *no* unsaved edits, Typing reloads it and
-tells you.
+tells you. If the file is deleted while it is open, Typing says so and keeps your
+text; saving writes the file again. A change is detected by comparing the file's
+content, not its timestamp, so a same-second write by another program is caught
+too.
 
 ## Writing
 

@@ -102,7 +102,12 @@ async function main() {
     check('window title shows dirty state', title.startsWith('•'), title)
 
     await page.keyboard.press('Meta+S')
-    await page.waitForTimeout(1200)
+    // Wait for the save to be reflected in the title instead of assuming a fixed
+    // delay: on a loaded machine the write can take longer than a second.
+    await page
+      .waitForFunction(() => !document.title.startsWith('•'), null, { timeout: 15000 })
+      .catch(() => {})
+    await page.waitForTimeout(200)
     const saved = await fs.readFile(samplePath, 'utf8')
     check('⌘S wrote the edit to disk', saved.includes('Smoke test insertion ✓'))
     check('saving preserved the front matter bytes', saved.startsWith('---\ntitle: Smoke test\ntags: [one, two]\n---\n'))

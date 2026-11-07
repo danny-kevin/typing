@@ -1,41 +1,41 @@
 [
   {
     "file": "everyday-100kb.md",
-    "launchMs": 1842,
+    "launchMs": 1927,
     "latency": {
       "median": 4.6,
-      "p95": 7.5,
-      "max": 13.2
+      "p95": 7.3,
+      "max": 21.9
     },
     "scroll": {
-      "median": 14.4,
-      "p95": 56.4,
-      "max": 56.4
+      "median": 14.3,
+      "p95": 67.3,
+      "max": 67.3
     },
     "content": {
-      "chars": 1231,
+      "chars": 1303,
       "lines": 53,
-      "widgets": 1
+      "widgets": 2
     },
     "errors": []
   },
   {
     "file": "stress-1mb.md",
-    "launchMs": 1342,
+    "launchMs": 1077,
     "latency": {
-      "median": 10.8,
-      "p95": 15.7,
-      "max": 22.7
+      "median": 11.5,
+      "p95": 16.8,
+      "max": 22.1
     },
     "scroll": {
-      "median": 21.6,
-      "p95": 108.4,
-      "max": 108.4
+      "median": 21.5,
+      "p95": 96.8,
+      "max": 96.8
     },
     "content": {
-      "chars": 1231,
+      "chars": 1303,
       "lines": 53,
-      "widgets": 1
+      "widgets": 2
     },
     "errors": []
   }

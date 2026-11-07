@@ -96,11 +96,17 @@ scripts/make-icon.mjs  generates the original app icon (no image dependencies)
 
 ## The fidelity model
 
-`src/shared/doc.ts` records the two things a JavaScript string cannot hold: a
-UTF-8 BOM and the file's newline convention. Decoding only normalises CRLF to LF
-for editing, and encoding restores exactly what was there. Saving compares the
-encoded bytes with what is on disk and **does not write at all** when they match,
-so an untouched file keeps its bytes *and* its modification time.
+`src/shared/doc.ts` records the things a JavaScript string cannot hold: a UTF-8
+BOM and the ending of **every** line. Decoding normalises CRLF, LF and lone CR to
+LF for editing, and encoding restores each line's original ending, so a file that
+mixes them comes back unchanged; lines you add take the file's dominant ending.
+Saving compares the editor's text with what is on disk and **does not write at
+all** when they match, so an untouched file keeps its bytes *and* its
+modification time. `src/main/save-doc.ts` owns the write: a file that changed
+since it was opened (compared by content hash, not by mtime) is never replaced —
+the version you were editing is written next to it as a conflict copy instead —
+and bytes that are not valid UTF-8 are never overwritten without an explicit
+choice.
 
 Unsupported syntax is never parsed into a structure and then rebuilt: it is text,
 so it survives. Edits are plain text splices, so a table edit rewrites the table
@@ -110,10 +116,15 @@ block and nothing else.
 
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`.
 - CSP: `default-src 'none'`; scripts only from the bundle; images/fonts only from
-  the app, `data:` and the `typing-asset:` protocol; no `connect-src` to anything
-  but the app and the dev server; no frames, no objects.
+  the app, `data:` and the `typing-asset:` protocol; `connect-src` allows the app
+  and nothing else in a packaged build (the dev server's localhost origins are
+  added only by `electron-vite dev`); no frames, no objects.
 - `typing-asset://` serves files only from folders the user explicitly opened,
-  after resolving the path and checking it stays inside that folder.
+  after resolving both the folder and the requested path with `realpath`, so a
+  symlink inside an opened folder cannot reach a file outside it.
+- Every way of leaving a document goes through one unsaved-work guard
+  (`guardUnsavedWork`), and a switch also drops the previous document's undo
+  history, search results and pending autosave.
 - HTML in documents is shown as text and never injected into the DOM. Export
   sanitises with DOMPurify, and remote resources are never fetched.
 - Mermaid renders with `securityLevel: 'strict'`; KaTeX runs with `trust: false`.

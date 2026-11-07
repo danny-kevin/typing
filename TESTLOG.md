@@ -9,13 +9,14 @@ Environment: macOS (arm64), Electron 45.2.3, Node 26.4.0, 2026-11-06.
 ## 1. Unit tests — `npm test` (vitest)
 
 ```
-Test Files  4 passed (4)
-Tests       80 passed (80)
+Test Files  5 passed (5)
+Tests       123 passed (123)
 ```
 
 | Suite | What it covers |
 | --- | --- |
-| `test/unit/fidelity.test.ts` | decode→encode is byte-identical for the whole corpus (nested lists, tables, links, front matter, HTML blocks, maths, mermaid, Chinese, unknown syntax, code fences), plus UTF-8 BOM preservation, CRLF preservation, no-trailing-newline, empty file, BOM-only file, lone `\r`, invalid UTF-8 flagging, trailing whitespace/tabs, and "edit one line ⇒ only that line differs" |
+| `test/unit/fidelity.test.ts` | decode→encode is byte-identical for the whole corpus (nested lists, tables, links, front matter, HTML blocks, maths, mermaid, Chinese, unknown syntax, code fences), plus UTF-8 BOM preservation, CRLF preservation, no-trailing-newline, empty file, BOM-only file, lone `\r`, invalid UTF-8 flagging, trailing whitespace/tabs, and "edit one line ⇒ only that line differs". Also the mixed-ending cases: `one\r\ntwo\r\nthree\n`, LF-dominant with a CRLF line, CRLF+LF+lone CR, an all-lone-CR file, each with and without a BOM; and `remapLineEndings` (unchanged lines keep their ending, new lines take the dominant one, deletion, no-trailing-newline, empty original) |
+| `test/unit/save-safety.test.ts` | the write path against a real temp directory: no-edit saves leave bytes *and* mtime alone (mixed, BOM, lone-CR, plain); an edit keeps each existing ending and gives new lines the dominant one; a BOM survives exactly once; a non-UTF-8 file is refused in place, reported unchanged when untouched, and written only with explicit consent; a same-millisecond external write is caught by content hash; a write landing after the temporary file exists is caught before the rename; the other writer's bytes and our copy both survive; a file deleted before or during the save is recreated and reported; `onConflict: 'report'` writes nothing; no temporary files are left behind |
 | `test/unit/markdown.test.ts` | outline extraction (fences/front matter/setext), GFM table parse/serialise stability, row/column/alignment edits, table edit locality (neighbours untouched), maths scanning outside code, statistics (CJK + latin), inline wrap/unwrap, line prefixes, heading levels, list continuation, task toggling |
 | `test/unit/inline.test.ts` | inline scanner (strong/em/code/strike/highlight/link/image/reference links), no false positives on `2 * 3`, `snake_case`, Chinese prose; block scanner classification |
 | `test/unit/commands.test.ts` | every accelerator parses, no duplicate bindings, `⌘S` vs `⇧⌘S`, Option-modified keys, digit headings, punctuation keys |
@@ -106,14 +107,69 @@ Full suites re-run on the packaged bundle copied to
 `/Users/danny/Projects/typing-build/Typing.app` (macOS arm64, Electron 45.2.3,
 Node 26.4.0, 2026-11-07):
 
-| Suite | Result |
+| Suite | Result (final branch, after the data-safety change) |
 | --- | --- |
-| `npm test` | 80/80 tests, 4 files |
-| `npm run smoke` | 14/14 checks (one run first reported `0 heading line(s)` under heavy machine load and passed on the immediate rerun; that check reads the DOM before the first decoration pass and is a pre-existing timing sensitivity, not a regression) |
+| `npm test` | 123/123 tests, 5 files |
+| `npm run smoke` | 14/14 checks |
 | `npm run smoke:features` | 28/28 checks |
 | `npm run smoke:caret` | 27/27 checks |
+| `npm run smoke:datasafety` | 61/61 checks (section 5) |
 
-## 5. Performance — `npm run perf`
+## 5. Data safety — `npm run smoke:datasafety`
+
+New suite for the two reproduced defects and the risks that were verified with a
+real reproduction. It launches the packaged app in six fresh instances (each with
+its own `--user-data-dir`, so Electron's single-instance lock can never answer for
+a run) and drives the real UI:
+
+```
+61/61 checks passed
+```
+
+| Group | Checks |
+| --- | --- |
+| Unsaved-work guard | `⌘N` on an untitled draft asks `Save / Don't Save / Cancel`; Cancel keeps the draft; a cancelled Save As keeps the draft *and* aborts the switch; Save on an untitled draft goes through Save As, writes the file and only then switches; a named dirty document asks too, Cancel writes nothing, Don't Save discards, Save writes first; quick open asks before replacing unsaved work; `⌘W` asks through the same guard; a pending autosave is dropped when the document is left |
+| Undo / in-flight saves | `⌘Z` after switching documents does not restore the previous file; a save started for one file writes that file and never the one opened next; the editor shows the document opened last |
+| Mixed line endings | `one\r\ntwo\r\nthree\n` keeps its exact bytes on open + save *and* its mtime; an edit keeps CRLF/LF and gives the new line the dominant CRLF; a BOM + mixed-ending file is unchanged on open + save, and after an edit keeps one BOM and every original ending |
+| Non-UTF-8 files | opening warns; `⌘S` leaves the bytes alone and offers Save As; `file.save` refuses with `code: invalid-utf8`; explicit consent writes valid UTF-8 |
+| Concurrent writers | a same-millisecond external write (mtime restored) is caught by content hash: the other program's file is untouched and our text lands in a conflict copy; deleting the open file is reported and the next save recreates it |
+| Asset protocol | an image inside an opened folder is served (200); a symlink inside that folder pointing outside it is refused (403); a path outside every opened folder is refused (403) |
+| Spell check / CSP | the packaged main process enables the spell checker engine, the preference toggles `spellcheck` in the editor DOM; the packaged CSP has no localhost origin and a page script cannot reach a local HTTP server (0 requests arrive) |
+
+What the same cases did on the pre-fix bundle
+(`/Users/danny/Projects/typing-build/Typing.app` as it was before this branch —
+probes kept outside the worktree):
+
+| Case | Pre-fix result | After |
+| --- | --- | --- |
+| `⌘N` with an untitled draft | no dialog, editor emptied, `⌘Z` could not bring it back | dialog, Cancel/Don't Save/Save |
+| `⌘N` with a **named** dirty document | no dialog; the edit never reached disk and the editor was emptied | dialog; Save writes first, Cancel keeps everything |
+| `one\r\ntwo\r\nthree\n` + `⌘S` | became `one\r\ntwo\r\nthree\r\n` | bytes and mtime unchanged |
+| non-UTF-8 file + `⌘S` | `0xFF 0xFE` replaced by two U+FFFD, no warning | refused, banner, original bytes untouched |
+| external write within the same millisecond | silently overwritten, no conflict copy | detected by hash, conflict copy, original kept |
+| symlink inside the opened folder | served the file outside it (`TOP SECRET`) | 403 |
+| packaged CSP | `connect-src 'self' typing-asset: ws://localhost:* http://localhost:*` | `connect-src 'self' typing-asset:` |
+| spell-check preference | `webPreferences.spellcheck: false` while the preference claimed on | engine enabled, preference drives the editor attribute |
+
+Two notes on honesty:
+
+- The guard checks cannot run against the pre-fix bundle directly: it lacks the
+  `__typingTest.state/newDocument` hooks they use. The pre-fix rows above come
+  from separate probes that drive the same UI paths (`⌘N`, keyboard typing, `⌘S`,
+  `fetch` of a `typing-asset://` URL) without those hooks.
+- Spell check is verified at the setting level, not by eye: no dictionary
+  service is available in this automation environment, so right-clicking a
+  misspelled word produced no `misspelledWord` in either build and the red
+  underline could not be observed. The engine switch and the preference-to-DOM
+  wiring are both checked; the visible squiggle in a real session is not.
+
+The suite also uncovered and pinned one pre-existing bug it depends on: a table
+operation left a selection running past the rewritten table, which made the lines
+after the table render as raw source (the task-list checkboxes disappeared). The
+selection is now collapsed at the end of the rewritten block, with a unit test in
+`test/unit/markdown.test.ts`.
+
+## 6. Performance — `npm run perf`
 
 Generated documents: `everyday-100kb.md` (100 KB) and `stress-1mb.md` (1 MB, with
 tables, code fences, display maths and mermaid diagrams every few sections).
@@ -122,21 +178,23 @@ moves one screen per step.
 
 | Document | Launch | Typing median | Typing p95 | Scroll median | Scroll p95 |
 | --- | --- | --- | --- | --- | --- |
-| 100 KB | 517 ms | 3.5 ms | 7.3 ms | 13.9 ms | 43.2 ms |
-| 1 MB | 564 ms | 5.7 ms | 7.5 ms | 14.5 ms | 121.7 ms |
+| 100 KB | 1927 ms | 4.6 ms | 7.3 ms | 14.3 ms | 67.3 ms |
+| 1 MB | 1077 ms | 11.5 ms | 16.8 ms | 21.5 ms | 96.8 ms |
 
-A shorter, bounded re-measurement on the final build (30 keystrokes, 8 scroll
-steps, 1 MB document) gave: launch 0.87 s, typing median 9.9 ms, p95 16.8 ms,
-scroll frames 12–28 ms. The spread between runs is JIT warm-up and widget layout
-on first entry; both sets are inside one 60 Hz frame for typing.
+The numbers above are the last run of this branch, on a machine that three
+worktrees were sharing, so treat them as a sanity check rather than a benchmark:
+earlier recorded runs on the same code were 2126/1389 ms launch, 4.8/11.5 ms
+typing median and 14.1/20.1 ms scroll median, and the older log above (517/564 ms
+launch) was measured on an idle machine. Raw numbers are in
+`test/perf/last-run.json`.
 
-**`npm run perf` can hang.** It was run successfully several times (the table
-above), but one run never returned and left two `Typing` processes behind on a
-loaded machine; the run had to be killed. The script now has a 240-second
-watchdog that kills its Electron processes and exits non-zero, and it force-kills
-the app if `close()` does not finish in five seconds. Treat the numbers above as
-the recorded result and do not run the bench in a foreground shell without a
-timeout.
+**The bench no longer hardcodes `/tmp` or kills by process name.** Each run takes
+its own `mkdtemp` directory (removed afterwards), signals only the Electron
+processes it launched and their descendants (resolved from `ps` by pid, never by
+name), and has two ceilings: 150 s per document and a 300 s watchdog; both kill
+only those processes and exit non-zero. It was run twice on this branch and
+finished normally both times (`exit 0`), and left no `typing-perf-*` directory
+and no `Typing` process behind.
 
 Notes: the 1 MB scroll p95 excursions happen when large block widgets (tables,
 diagrams) enter the viewport for the first time; diagrams render lazily and one at
@@ -144,7 +202,7 @@ a time, so they never block typing. Only the visible window (±120/220 lines) is
 decorated; a scroll that stays inside the decorated window costs nothing. Raw
 numbers are in `test/perf/last-run.json`.
 
-## 6. Manual / one-off checks (not part of the automated suites)
+## 7. Manual / one-off checks (not part of the automated suites)
 
 **Crash recovery.** With autosave disabled, typed into a file, waited for the
 draft, `kill -9` the app, relaunched with the same data directory: the
@@ -163,7 +221,7 @@ file and closed the window.
 **Layout.** Window probes at 1180×820 and 700×480: no horizontal overflow, the
 status bar sits flush at the bottom, the outline and sidebar collapse correctly.
 
-## 7. Manual checks performed (screenshots taken locally, not committed)
+## 8. Manual checks performed (screenshots taken locally, not committed)
 
 - Light and dark theme rendering; theme follows the system setting live.
 - Front matter collapsed to a chip when the caret is away, raw when on it.
@@ -179,6 +237,13 @@ status bar sits flush at the bottom, the outline and sidebar collapse correctly.
   tested).
 - PDF export is verified to produce a valid PDF and by eye, not by pixel diffing.
 - No CI; everything runs locally.
-- `npm run perf` hung once on a loaded machine (see above); it now has a watchdog
-  but was not re-run afterwards, so the newest perf numbers are the bounded
-  30-keystroke measurement, not a fresh `npm run perf` run.
+- Spell check is verified at the setting level only: no dictionary service was
+  available in the automation environment, so the red underline of a misspelled
+  word could not be observed in either build.
+- One `npm run smoke` run of the copied bundle reported
+  `title clears the dirty flag after save` as a failure under heavy machine load
+  and passed on the immediate rerun (14/14). That check now waits for the title
+  instead of assuming a fixed delay after `⌘S`.
+- The mixed line-ending guarantees are tested for UTF-8 files (edit, no-edit,
+  BOM, lone CR, LF/CRLF mixes). Files that are not valid UTF-8 are refused in
+  place, so their internal endings were not round-tripped by design.
