@@ -110,6 +110,7 @@ describe('local history store', () => {
     await store.capture(path, bytes('original'), 'save'); tick(); fail = true
     expect(await store.capture(path, bytes('new'), 'save')).toBe(false)
     expect(errors.length).toBe(1)
+    expect(await fs.readdir(join(dir, 'history', 'blobs'))).toHaveLength(1)
     const fresh = new HistoryStore(join(dir, 'history'))
     const list = (await fresh.list(path)).snapshots
     expect(list).toHaveLength(1)

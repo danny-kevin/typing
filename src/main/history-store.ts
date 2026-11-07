@@ -48,6 +48,9 @@ export class HistoryStore {
       } catch (error) {
         this.index = previous
         this.log(error)
+        // A failed manifest commit must not accumulate a full set of orphan
+        // chunks on every save. Only the prior committed references survive.
+        if (previous) await this.collectGarbage(previous)
         return fallback
       }
     })
@@ -80,6 +83,7 @@ export class HistoryStore {
       const raw = JSON.parse(await fs.readFile(join(this.directory, 'index.json'), 'utf8')) as Index
       if (raw.version !== 1 || !raw.documents || !raw.blobs || !raw.config) throw new Error('Unsupported history index')
       this.index = raw
+      await this.collectGarbage(raw)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       this.index = { version: 1, config: { ...DEFAULT_HISTORY }, documents: {}, blobs: {} }
@@ -136,9 +140,13 @@ export class HistoryStore {
     await this.atomic(join(this.directory, 'index.json'), JSON.stringify(this.index), true)
     // Publish manifest first. GC failure is harmless; an interrupted write only
     // leaves unreferenced blobs, never dangling committed references.
+    await this.collectGarbage(this.index!)
+  }
+
+  private async collectGarbage(index: Index): Promise<void> {
     try {
       for (const name of await fs.readdir(join(this.directory, 'blobs'))) {
-        if (!this.index!.blobs[name] && /^[a-f0-9]{64}$/.test(name)) await fs.rm(join(this.directory, 'blobs', name), { force: true })
+        if (!index.blobs[name] && /^[a-f0-9]{64}$/.test(name)) await fs.rm(join(this.directory, 'blobs', name), { force: true })
       }
     } catch (error) { this.log(error) }
   }
