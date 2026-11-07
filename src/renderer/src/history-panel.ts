@@ -40,7 +40,7 @@ export class HistoryPanel {
 
   async open(): Promise<void> {
     if (this.dialog?.root.isConnected) { this.close(); return }
-    this.dialog = openDialog('Local History', (body, close) => {
+    this.dialog = openDialog('Local History', (body) => {
       body.innerHTML = `
         <p id="history-path" class="history-path"></p>
         <p id="history-notice" role="status">Loading local history…</p>
@@ -77,8 +77,8 @@ export class HistoryPanel {
           <p>Oldest snapshots are removed first. The newest snapshot of every document is always kept, even when that exceeds the cap. Renamed or moved files start a separate history; symlink aliases share their canonical path's history.</p>
           <div class="actions"><button id="history-clear-document" class="btn">Clear history for this document</button><button id="history-clear-all" class="btn">Clear all history</button></div>
         </details>`
-      // Escape and the standard Close button go through this wrapper, so stale
-      // pending snapshot reads cannot fill a subsequently opened sheet.
+      // Keep Tab navigation inside the sheet. Pending reads also check the
+      // root's connection when Escape or a backdrop click closes the dialog.
       body.parentElement!.addEventListener('keydown', event => {
         if (event.key !== 'Tab') return
         const controls = Array.from(body.parentElement!.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea, summary, [tabindex="0"]')).filter(el => el.getClientRects().length > 0)
@@ -86,7 +86,6 @@ export class HistoryPanel {
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
       })
-      void close
     }, [{ label: 'Close', onClick: () => this.close() }])
     this.dialog.root.classList.add('history-sheet')
     const on = (id: string, event: string, fn: () => void): void => { this.element(id).addEventListener(event, fn) }

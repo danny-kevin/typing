@@ -105,11 +105,12 @@ export function decodeDoc(bytes: Uint8Array): DecodedDoc {
   const body = bom ? bytes.subarray(3) : bytes
   let text: string
   let validUtf8 = true
+  // We already removed the marker; a second U+FEFF is content, not another BOM.
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(body)
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body)
   } catch {
     validUtf8 = false
-    text = new TextDecoder('utf-8').decode(body)
+    text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(body)
   }
   const { text: normalised, lineEndings } = splitLineEndings(text)
   return { text: normalised, eol: eolForEndings(lineEndings), lineEndings, bom, validUtf8 }

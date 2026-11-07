@@ -80,6 +80,13 @@ describe('source fidelity: decode → encode is byte identical', () => {
     expect(bytesEqual(encodeDoc(decodeDoc(encodeDoc(doc))), withBom)).toBe(true)
   })
 
+  it('preserves a leading content U+FEFF after the actual BOM (history byte fidelity)', () => {
+    const original = bytes('\ufeffone\r\ntwo\n', true)
+    const doc = decodeDoc(original)
+    expect(doc.text.startsWith('\ufeffone')).toBe(true)
+    expect(bytesEqual(encodeDoc(doc), original)).toBe(true)
+  })
+
   it('handles files without a trailing newline', () => {
     const original = bytes('# title\n\nlast line without newline')
     expect(bytesEqual(roundTrip(original), original)).toBe(true)

@@ -302,7 +302,8 @@ function persistDraft(target: DocState): void {
     key: target.id, path: target.path, text: target.editor.getText(), savedAt: Date.now(),
     baseMtimeMs: target.baseMtimeMs, baseHash: target.baseHash, savedText: target.savedText,
     eol: target.eol, lineEndings: target.lineEndings, bom: target.bom,
-    validUtf8: target.validUtf8, sourceMode: target.sourceMode
+    validUtf8: target.validUtf8, sourceMode: target.sourceMode,
+    historyFormat: documentFormat(target)
   })
 }
 
@@ -885,7 +886,7 @@ async function revertToSaved(): Promise<void> {
 
 /** Restore never writes the file directly or opts out of any save protection. */
 function restoreHistory(id: string, target = doc): Promise<boolean> {
-  if (target.historyTask || target.closing || closingWindow) return Promise.resolve(false)
+  if (target.historyTask || target.closing || closingWindow || guardInFlight) return Promise.resolve(false)
   const task = restoreHistorySnapshot(id, target)
   target.historyTask = task
   cancelPendingWrites(target)
@@ -897,7 +898,12 @@ function restoreHistory(id: string, target = doc): Promise<boolean> {
 }
 
 async function restoreHistorySnapshot(id: string, target: DocState): Promise<boolean> {
+  const invokedDoc = target.editor.view.state.doc
+  const edited = (): false => { ui.toast('Restore cancelled because you edited the document while history was being read.'); return false }
   if (target.saveTask) await target.saveTask
+  if (target.editor.view.state.doc !== invokedDoc) return edited()
+  const state = target.editor.view.state
+  const unchanged = (): boolean => target.editor.view.state.doc === state.doc && target.editor.view.state.field(historyFormat) === state.field(historyFormat)
   const path = target.path
   const generation = target.generation
   if (!path || !tabs.items.includes(target)) return false
@@ -908,22 +914,21 @@ async function restoreHistorySnapshot(id: string, target: DocState): Promise<boo
   }
   if (!safe()) return blocked()
   const snapshot = await api.call('history.read', path, id) as (EncodableDoc & { validUtf8: boolean }) | null
+  if (!unchanged()) return edited()
   if (!snapshot) { ui.toast('That snapshot is no longer available.'); return false }
   if (!snapshot.validUtf8) { ui.toast('This snapshot contains invalid UTF-8. Copy it to a new tab instead; the original will not be overwritten.', 6500); return false }
   const disk = await api.call('file.peek', path) as FileReadResult
+  if (!unchanged()) return edited()
   if (!safe() || !disk.ok || !disk.validUtf8 || disk.hash !== target.baseHash) {
     if (tabs.items.includes(target)) await promptExternalChange(target)
     return blocked()
   }
-  const state = target.editor.view.state
-  if (!(await beforeOverwrite(target, 'before-restore'))) return false
+  if (!(await beforeOverwrite(target, 'before-restore'))) return edited()
   const verified = await api.call('file.peek', path) as FileReadResult
+  if (!unchanged()) return edited()
   if (!safe() || !verified.ok || !verified.validUtf8 || verified.hash !== target.baseHash) {
     if (tabs.items.includes(target)) await promptExternalChange(target)
     return blocked()
-  }
-  if (target.editor.view.state.doc !== state.doc || target.editor.view.state.field(historyFormat) !== state.field(historyFormat)) {
-    ui.toast('Restore cancelled because you edited the document while history was being saved.'); return false
   }
   target.generation++
   target.editor.view.dispatch({
@@ -1012,6 +1017,7 @@ async function offerRecovery(): Promise<void> {
     bom?: boolean
     validUtf8?: boolean
     sourceMode?: boolean
+    historyFormat?: EncodableDoc
   }
   const drafts = (await api.call('recovery.list')) as Draft[]
   if (!drafts.length) return
@@ -1026,7 +1032,7 @@ async function offerRecovery(): Promise<void> {
     if (draft.path) {
       const disk = (await api.call('file.peek', draft.path)) as FileReadResult & { ok: boolean }
       // Nothing to recover when the file already contains this text.
-      if (disk.ok && disk.text === draft.text) {
+      if (disk.ok && disk.text === draft.text && (!draft.historyFormat || (disk.bom === draft.historyFormat.bom && disk.lineEndings === draft.historyFormat.lineEndings))) {
         await api.call('recovery.clear', key)
         continue
       }
@@ -1063,6 +1069,7 @@ async function offerRecovery(): Promise<void> {
     }
     target.savedText = draft.savedText ?? (disk?.ok ? disk.text : '')
     target.editor.setText(draft.text)
+    if (draft.historyFormat) target.editor.view.dispatch({ effects: historyFormatEffect.of(draft.historyFormat), annotations: Transaction.addToHistory.of(false) })
     target.sourceMode = draft.sourceMode ?? target.sourceMode
     target.editor.setSourceMode(target.sourceMode)
     target.externalChange = Boolean(disk?.ok && target.baseHash && disk.hash !== target.baseHash)
@@ -1733,6 +1740,7 @@ declare global {
       command: (command: string) => Promise<void>
       getText: () => string
       save: () => Promise<boolean>
+      restoreHistory: (id: string) => Promise<boolean>
       insert: (text: string) => void
       isDirty: () => boolean
       path: () => string | null
@@ -1757,6 +1765,7 @@ if (api.testMode) {
     command: (command: string) => runCommand(command),
     getText: () => editor.getText(),
     save: () => save(false),
+    restoreHistory: id => restoreHistory(id),
     insert: (text: string) => fmt.insertText(editor.view, text),
     isDirty: () => isDirty(),
     path: () => doc.path,

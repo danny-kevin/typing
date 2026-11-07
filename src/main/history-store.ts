@@ -67,9 +67,12 @@ export class HistoryStore {
     // Never follow a history symlink into a document or cloud folder. Common
     // sync roots and network filesystems are deliberately unsupported.
     const physicalParent = await fs.realpath(resolve(this.directory, '..'))
+    if (/^(\\\\|\/\/)/.test(physicalParent)) throw new Error('History requires a local user-data directory')
     if (/(?:^|[\\/])(?:OneDrive[^\\/]*|Dropbox|CloudStorage|Mobile Documents|Google Drive)(?:[\\/]|$)/i.test(physicalParent)) throw new Error('History cannot be stored in a synced directory')
     const stat = await fs.statfs(physicalParent)
-    if ([0x6969, 0x517b, 0xff534d42, 0xfe534d42, 0x364720].includes(Number(stat.type))) throw new Error('History cannot be stored on a network filesystem')
+    // macOS VFS identifiers differ from Linux magic numbers. Fail closed to
+    // its normal local user-data filesystems (APFS/HFS), including NFS type 2.
+    if ((process.platform === 'darwin' && ![17, 26].includes(Number(stat.type))) || [0x6969, 0x517b, 0xff534d42, 0xfe534d42, 0x364720].includes(Number(stat.type))) throw new Error('History cannot be stored on a network filesystem')
     await this.localDirectory(this.directory)
     await this.localDirectory(join(this.directory, 'blobs'))
     if (this.index) return

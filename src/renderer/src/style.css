@@ -910,6 +910,7 @@ html.dark .dialog .btn.primary {
 html.source-mode .cm-content { --editor-width: 860px; }
 
 /* Local history: native controls, bounded diff DOM, no rendered Markdown. */
+.overlay:has(.history-sheet) { padding-top: 4vh; }
 .dialog.history-sheet { width: min(1100px, 94vw); max-width: 94vw; max-height: 92vh; }
 .history-path { overflow-wrap: anywhere; }
 .history-controls, .history-limits { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin: 12px 0; }

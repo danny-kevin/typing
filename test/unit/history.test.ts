@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -128,6 +128,40 @@ describe('local history store', () => {
     const store = new HistoryStore(broken, { log: e => errors.push(e) })
     expect(await store.capture(path, bytes('saved'), 'save')).toBe(false)
     expect(errors).toHaveLength(1)
+  })
+
+  it('refuses a network filesystem rather than writing private snapshots there', async () => {
+    const { dir, path } = await setup()
+    const stat = await fs.statfs(dir)
+    const spy = vi.spyOn(fs, 'statfs').mockResolvedValue({ ...stat, type: process.platform === 'darwin' ? 2 : 0x6969 })
+    try {
+      const store = new HistoryStore(join(dir, 'remote-history'), { log: () => {} })
+      expect(await store.capture(path, bytes('private'), 'save')).toBe(false)
+      expect(await fs.stat(join(dir, 'remote-history')).catch(() => null)).toBeNull()
+    } finally { spy.mockRestore() }
+  })
+
+  it('refuses a known synced user-data location', async () => {
+    const { dir, path } = await setup()
+    const cloud = join(dir, 'CloudStorage'); await fs.mkdir(cloud)
+    const store = new HistoryStore(join(cloud, 'history'), { log: () => {} })
+    expect(await store.capture(path, bytes('private'), 'save')).toBe(false)
+    expect(await fs.readdir(cloud)).toEqual([])
+  })
+
+  it('persists opt-outs and settings across restart, clears content without erasing exclusions', async () => {
+    const { store, path, dir } = await setup()
+    await store.capture(path, bytes('private'), 'save')
+    await store.setDisabled(path, true)
+    await store.configure({ enabled: false, maxCount: 50 })
+    await store.clear()
+    const fresh = new HistoryStore(join(dir, 'history'))
+    const listing = await fresh.list(path)
+    expect(listing.config.enabled).toBe(false)
+    expect(listing.config.maxCount).toBe(50)
+    expect(listing.disabled).toBe(true)
+    expect(listing.snapshots).toEqual([])
+    expect(await fs.readdir(join(dir, 'history', 'blobs'))).toEqual([])
   })
 
   it('refuses redirected history directories rather than writing alongside other files', async () => {
