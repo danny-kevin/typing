@@ -196,6 +196,13 @@ files, files with no trailing newline, lone `\r` characters that are not line
 endings, invalid UTF-8, and edits inside a mixed file that must leave the other
 endings alone.
 
+One honest limit: the irregular endings of a mixed file are remembered by line
+position. Opening a mixed-ending file and saving it untouched is byte-identical,
+and editing a line keeps every other ending where it was, but inserting or
+deleting whole blocks later in the file can move an irregular ending by a line.
+A file whose endings are all the same — which is what every editor on both
+platforms produces — has no such case.
+
 Unsupported syntax is never parsed into a structure and then rebuilt: it is text,
 so it survives. Edits are plain text splices, so a table edit rewrites the table
 block and nothing else.
