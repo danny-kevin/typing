@@ -4,7 +4,8 @@ All results below were produced by running the commands in this file, against th
 packaged `release/mac-arm64/Typing.app` built from this branch. Nothing here is an
 estimate; rerun the commands to reproduce.
 
-Environment: macOS (arm64), Electron 45.2.3, Node 26.4.0, 2026-11-06.
+Environment: macOS (arm64), Electron 45.2.3, Node 26.4.0, 2026-11-06 (sections
+1–6), and the Windows-support run at the end of this file, 2026-11-07.
 
 ## 1. Unit tests — `npm test` (vitest)
 
@@ -247,3 +248,191 @@ status bar sits flush at the bottom, the outline and sidebar collapse correctly.
 - The mixed line-ending guarantees are tested for UTF-8 files (edit, no-edit,
   BOM, lone CR, LF/CRLF mixes). Files that are not valid UTF-8 are refused in
   place, so their internal endings were not round-tripped by design.
+
+## 9. Windows support run — branch `fm/typing-windows-w7` (2026-11-07)
+
+Environment: macOS 26.6 (arm64) build host, Electron 45.2.3, Node 26.4.0. **No
+Windows machine was available.** Everything below was run on the Mac; the Windows
+artefact was verified by inspection, not by launching it.
+
+### 9.1 Unit tests — `npm test`
+
+```
+Test Files  8 passed (8)
+Tests       156 passed (156)
+```
+
+| Suite | Tests | What is new in this run |
+| --- | --- | --- |
+| `test/unit/fidelity.test.ts` | 49 | CRLF round trip, CRLF after an edit, CRLF + UTF-8 BOM, mixed CRLF/LF files (both dominant styles), mixed file with no trailing newline, edit inside a mixed file, a line added to a CRLF file, stale exception indices; plus the CRLF form of every corpus document |
+| `test/unit/paths.test.ts` | 11 | drive letters, UNC shares, mixed separators, `..` collapsing on both platforms, case-insensitive containment, no prefix confusion (`notes` vs `notes2`), relative image links, `~` shortening |
+| `test/unit/assets.test.ts` | 15 | `typing-asset:` URL resolution against Windows folders (drive letters mistaken for schemes, spaces, CJK names, backslashes), remote/protocol-relative refusal, data URLs, round trip back to a path |
+| `test/unit/commands.test.ts` | 16 | `Ctrl` bindings on Windows vs `⌘` on macOS, `Ctrl+Alt` and punctuation commands, IME composition guarding, `CmdOrCtrl` menu accelerators, `⇧⌘S` vs `Ctrl+Shift+S` rendering |
+| `test/unit/menu.test.ts` | 9 | macOS template (application menu, Window menu, no `&`), Windows template (File/Edit/View/Format/Table/Help, Alt mnemonics, no macOS-only roles, Exit in File, About in Help, no duplicate keys) |
+| `test/unit/startup.test.ts` | 12 | argv parsing: macOS launch, Windows drive paths, quoted paths, forward slashes, UNC, relative paths, Chromium switches, forwarded executable, last-argument-wins, unreadable arguments |
+| `test/unit/markdown.test.ts` | 30 | unchanged |
+| `test/unit/inline.test.ts` | 14 | unchanged |
+
+### 9.2 macOS regression suites (unchanged behaviour) — all pass
+
+```
+npm run smoke         14/14 checks passed
+npm run smoke:features 28/28 checks passed
+npm run smoke:caret   27/27 checks passed
+npm run typecheck     clean
+```
+
+These ran against `release/mac-arm64/Typing.app` rebuilt from this branch,
+including the byte-identical open+save check for all 10 corpus files, CRLF and BOM
+editing, Chinese IME composition, image paste, external-change conflict copies,
+HTML/PDF export and the caret/pointer alignment suite. Runtime: smoke 7 s,
+features 31 s, caret 67 s.
+
+The three suites now end with an explicit `process.exit()` after printing their
+results: one caret run printed `27/27 checks passed` and then hung until the
+harness timeout, because a child app process the suite had already closed was
+still holding the event loop open. Same checks, no hang, honest exit code.
+
+The macOS build also caught a real regression during this run: the preload bridge
+used to drop `typing:event` messages that arrived before the renderer had
+registered a listener, so an initial document passed on the command line could be
+lost (the smoke test failed on "sample file opens"). The bridge now buffers events
+and replays them to the first listener; the suite passes again. This was a latent
+race that only showed up because the renderer's boot gained an extra IPC round
+trip.
+
+### 9.3 Windows package — `npm run package:win`
+
+Built on the Mac, no wine, no Windows machine, no signing certificate:
+
+```
+  • packaging       platform=win32 arch=x64 electron=45.2.3 appOutDir=release/win-unpacked
+  • no code signing certificate configured, signing is skipped
+  • building        target=zip arch=x64 file=release/Typing-0.1.0-win-x64.zip
+release/win-unpacked/Typing.exe                     241 MiB (250.2 MB)
+release/win-unpacked/                               372 MB
+release/Typing-0.1.0-win-x64.zip                    156,736,113 bytes
+```
+
+### 9.4 Windows package verification — `npm run verify:win`
+
+```
+46/46 checks passed
+```
+
+What it checked, from `scripts/check-win-package.mjs`:
+
+- `Typing.exe` is `MZ` + `PE\0\0`, optional-header magic `0x20b` (**PE32+**,
+  64-bit), machine `0x8664` (**x64**), Windows GUI subsystem; 250.2 MB.
+- `Typing.exe` embeds all 7 icon sizes from `build/icon.ico` (16–256 px) and
+  carries the product name and version in its version resource — so the icon step
+  did not need wine and was not skipped.
+- The unpacked folder ships the Windows Electron runtime: `resources.pak`,
+  `chrome_100_percent.pak`, `icudtl.dat`, `snapshot_blob.bin`,
+  `v8_context_snapshot.bin`, `ffmpeg.dll`, `d3dcompiler_47.dll`, `dxcompiler.dll`,
+  `vk_swiftshader.dll`, `vulkan-1.dll`, `locales/en-US.pak`,
+  `LICENSE.electron.txt`, `LICENSES.chromium.html`.
+- No `.dylib`, `.so`, `.app`, `Contents/` or `.icns` anywhere in the package; no
+  `node_modules` were packaged.
+- `resources/app.asar` contains `out/main/index.js`, `out/preload/index.js`,
+  `out/renderer/index.html`, 260 renderer asset files, `package.json`, and the
+  bundled `README.md`/`USAGE.md`/`THIRD_PARTY.md`.
+- The zip has 74 entries (72 files, 2 directory entries), only forward slashes,
+  `Typing.exe` and `resources/app.asar` at the root; every entry was extracted and
+  its CRC32 compared; `unzip -t` also reports no errors.
+
+### 9.5 What is verified only by unit test or inspection (not by running on Windows)
+
+Verified by unit test only (pure logic, exercised on the Mac):
+
+- keyboard shortcut matching and rendering for Windows (`Ctrl` as the primary
+  modifier, `show→ Ctrl+Shift+O`, `Ctrl+Enter`, IME-composition guarding);
+- the Windows menu template (shape, mnemonics, roles, unique accelerators) — the
+  template is a pure function, Electron's `Menu.buildFromTemplate` was not run
+  against it on Windows;
+- path handling: drive letters, UNC paths, mixed separators, case-insensitive
+  containment, forward-slash markdown links, `~` shortening;
+- argv/「open with」 parsing for Windows command lines;
+- asset URL resolution for `C:\…` document folders;
+- line-ending fidelity for CRLF, BOM and mixed files (this is platform-independent
+  and the same code path the app uses on both platforms).
+
+Verified by inspection of the artefact only:
+
+- that `Typing.exe` is a 64-bit PE for x64 and launches at all (only the file
+  format is proven);
+- that the packaged `.asar` contains the right bundles (not that they execute
+  correctly on Windows);
+- that the zip extracts cleanly (structure and CRCs, not that Windows Explorer's
+  built-in unzipper likes it);
+- that the app's rendered output is correct with Windows fonts (the font stacks are
+  declared, not measured).
+
+Not verified at all (no Windows machine):
+
+- the app starting, showing its native window frame and menu bar, and being
+  draggable/resizable;
+- system theme following on Windows (light/dark switch);
+- 125%/150% Windows display scaling with the new titlebar and scrollbar styles;
+- Chinese IME composition with Microsoft Pinyin / Sogou in this build (the code is
+  guarded and the macOS IME test passes, but the Windows IME paths differ);
+- "Open with", drag-and-drop of a file from Explorer, and jump-list/recent
+  documents;
+- file writes over a file locked by another program (the retry + in-place
+  fallback in `atomicWrite` is untested on Windows);
+- external-change detection with Windows file timestamps;
+- HTML/PDF export through the Windows print engine;
+- notifications through the Windows action centre.
+
+### 9.6 Manual checklist for a Windows machine
+
+After unzipping `Typing-win-x64.zip` and starting `Typing.exe` (SmartScreen: More
+info → Run anyway):
+
+1. **Starts and looks right.** Window has the Windows frame, minimise/maximise/
+   close work, the menu bar reads File · Edit · View · Format · Table · Help, and
+   `Alt+F` opens the File menu.
+2. **Shortcuts.** `Ctrl+O` opens a file, `Ctrl+S` saves, `Ctrl+/` toggles source
+   mode, `Ctrl+Shift+O` opens quick open in a folder, `Ctrl+Alt+T` inserts a table.
+   `Help ▸ Keyboard Shortcuts` shows `Ctrl+…` forms, not `⌘`.
+3. **Line endings.** Open a real CRLF document (e.g. from a Windows editor), press
+   `Ctrl+S` without typing: the file's modification time and bytes must be
+   unchanged. Type one character and save: the file must still be all-CRLF
+   (`Format-Hex` or a hex viewer). Repeat with a UTF-8-BOM file (the BOM appears
+   once) and with a mixed-ending file.
+4. **Paths.** Open a document from `C:\Users\<you>\Documents`, from a folder with
+   a space and a Chinese name, and from a UNC share (`\\server\share\note.md`)
+   if you have one. The title bar shows just the file name and the status bar shows
+   the `~`-shortened path.
+5. **Images.** Save a document, paste a screenshot with `Ctrl+V`, then drag an image
+   file onto the window: both land in `assets\` next to the document and the link
+   in the markdown uses forward slashes and still renders.
+6. **Open with / command line.** In Explorer: right-click a `.md` file → Open with →
+   Choose another app → Look for another app on this PC → `Typing.exe`. And from
+   cmd: `Typing.exe "C:\Users\<you>\Documents\a note.md"`.
+7. **Drag and drop.** Drag a `.md` file from Explorer onto the window: it opens. If
+   Typing is already open, launching it again with a file focuses the existing
+   window and opens that file there.
+8. **Autosave and recovery.** Preferences (`Ctrl+,`): check autosave is on, type,
+   wait ~2 s, the file changes on disk. Then turn autosave off, type, wait, kill
+   the app in Task Manager, relaunch: the recovery dialog offers the unsaved text.
+   Check `%APPDATA%\Typing\recovery` was used.
+9. **External change.** With unsaved edits, modify the file in another editor: the
+   banner offers Reload / Keep mine as a copy / Ignore. "Keep mine" writes
+   `name (conflict …).md` next to the original.
+10. **Theme, fonts, zoom.** Switch Windows to dark mode: the app follows it live.
+    Check the editor and UI text use Segoe UI for Latin and Microsoft YaHei for
+    Chinese (no fallback serif, no tofu). `F11` full screen, `Ctrl+Alt+0` resets
+    zoom.
+11. **IME.** Type Chinese with Microsoft Pinyin: the candidate window appears at
+    the caret, Enter/Space commit correctly, and `Ctrl+Z` after committing undoes
+    the whole commit rather than fighting the IME. Do the same with Sogou if
+    installed.
+12. **Export.** `Ctrl+Shift+E` writes a self-contained HTML file that opens in Edge
+    with maths and diagrams rendered and no network requests; `Ctrl+Alt+P` writes a
+    PDF through the Windows print engine.
+13. **Reveal and notifications.** "Keep mine as a copy" → Show in Explorer
+    highlights the file in Explorer. If a toast is triggered, it is grouped under
+    Typing in the action centre.
+14. **Closing.** With unsaved changes, `Ctrl+W`, the ✕ button and `Alt+F4` each ask
+    before closing; Cancel keeps the window.

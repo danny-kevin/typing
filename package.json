@@ -12,7 +12,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "package": "npm run build && electron-builder --mac dir --arm64 && codesign --force --deep --sign - release/mac-arm64/Typing.app",
-    "package:win": "npm run build && electron-builder --win --x64",
+    "package:win": "npm run build && electron-builder --win --x64 && node scripts/check-win-package.mjs",
     "verify:win": "node scripts/check-win-package.mjs",
     "test": "vitest run",
     "test:unit": "vitest run",

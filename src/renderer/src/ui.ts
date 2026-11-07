@@ -293,7 +293,6 @@ export function fuzzyScore(query: string, target: string): number {
 export function quickOpenDialog(
   files: string[],
   onPick: (path: string) => void,
-  home: string | null = null,
   platform = PLATFORM
 ): void {
   const host = overlay()

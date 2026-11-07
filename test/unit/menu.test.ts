@@ -75,9 +75,10 @@ describe('menu template: Windows', () => {
     })
   })
 
-  it('puts Exit in the File menu and About Typing in Help', () => {
+  it('puts Preferences in File, Exit in File and About Typing in Help', () => {
     const file = winTemplate.find((m) => m.label === '&File')!.submenu as MenuItemConstructorOptions[]
     expect(file.some((i) => i.role === 'quit')).toBe(true)
+    expect(file.some((i) => i.id === 'app.prefs')).toBe(true)
     const help = winTemplate.find((m) => m.label === '&Help')!.submenu as MenuItemConstructorOptions[]
     expect(help.some((i) => /About Typing/.test(i.label ?? ''))).toBe(true)
   })

@@ -93,6 +93,9 @@ export function buildMenuTemplate(send: Send, prefs: Prefs, opts: MenuBuildOptio
         submenu: [cmd('HTML…', 'export.html'), cmd('PDF…', 'export.pdf')]
       },
       { type: 'separator' },
+      // Windows and Linux have no application menu, so Preferences lives in File
+      // (the menu users look in) right above Exit.
+      ...(mac ? [] : ([cmd('Preferences…', 'app.prefs'), { type: 'separator' }] as MenuItemConstructorOptions[])),
       cmd('Close Window', 'app.close'),
       ...(mac
         ? []

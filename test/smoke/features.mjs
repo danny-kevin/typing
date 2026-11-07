@@ -15,8 +15,14 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, '../..')
-const appPath = process.argv[2] ?? join(projectRoot, 'release/mac-arm64/Typing.app')
-const executablePath = join(appPath, 'Contents/MacOS/Typing')
+const appPath =
+  process.env.TYPING_APP ??
+  process.argv[2] ??
+  join(projectRoot, 'release', process.platform === 'darwin' ? 'mac-arm64/Typing.app' : 'win-unpacked')
+// The packaged app lives in a bundle on macOS and in a plain folder on Windows/Linux.
+const executablePath =
+  process.env.TYPING_EXE ??
+  (process.platform === 'darwin' ? join(appPath, 'Contents/MacOS/Typing') : join(appPath, 'Typing.exe'))
 
 const results = []
 function check(name, ok, detail = '') {
@@ -62,7 +68,7 @@ async function main() {
 
   const read = () => fs.readFile(docPath, 'utf8')
   const save = async () => {
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(700)
   }
   const editorClick = async () => {
@@ -81,7 +87,7 @@ async function main() {
     check('sidebar is visible for a folder launch', sidebarVisible)
 
     // ---- quick open ------------------------------------------------------
-    await page.keyboard.press('Meta+Shift+O')
+    await page.keyboard.press('ControlOrMeta+Shift+O')
     await page.waitForTimeout(400)
     const quickVisible = await page.locator('.quick-input').count()
     check('⌘⇧O opens quick open', quickVisible === 1)
@@ -130,7 +136,7 @@ async function main() {
 
     // ---- IME composition ------------------------------------------------
     await editorClick()
-    await page.keyboard.press('Meta+ArrowDown')
+    await page.keyboard.press('ControlOrMeta+ArrowDown')
     await page.keyboard.press('Enter')
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Input.imeSetComposition', { text: 'nihao', selectionStart: 5, selectionEnd: 5 })
@@ -165,7 +171,7 @@ async function main() {
 
     // ---- autosave --------------------------------------------------------
     await editorClick()
-    await page.keyboard.press('Meta+ArrowDown')
+    await page.keyboard.press('ControlOrMeta+ArrowDown')
     await page.keyboard.type('AUTOSAVE-MARK')
     await page.waitForTimeout(2600)
     const afterAuto = await read()
@@ -228,7 +234,7 @@ async function main() {
       await page.evaluate(async (p) => window.__typingTest.openFile(p), target)
       await page.waitForTimeout(250)
       await page.evaluate(() => window.__typingTest.focus())
-      await page.keyboard.press('Meta+s')
+      await page.keyboard.press('ControlOrMeta+s')
       await page.waitForTimeout(320)
       const bytesAfter = await fs.readFile(target)
       const statAfter = await fs.stat(target)
@@ -248,10 +254,10 @@ async function main() {
     await page.evaluate(async (p) => window.__typingTest.openFile(p), crlfPath)
     await page.waitForTimeout(300)
     await page.evaluate(() => window.__typingTest.focus())
-    await page.keyboard.press('Meta+ArrowDown')
+    await page.keyboard.press('ControlOrMeta+ArrowDown')
     await page.keyboard.type('X')
     await page.waitForTimeout(200)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(600)
     const crlfBytes = await fs.readFile(crlfPath)
     const crlfText = crlfBytes.toString('utf8')
@@ -269,7 +275,7 @@ async function main() {
     await page.evaluate(() => window.__typingTest.focus())
     await page.keyboard.type('!')
     await page.waitForTimeout(150)
-    await page.keyboard.press('Meta+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await page.waitForTimeout(600)
     const bomBytes = await fs.readFile(bomPath)
     const bomCount = [...bomBytes].filter((b, i) => i < 3 && b === 0xef).length
@@ -283,7 +289,7 @@ async function main() {
     await page.evaluate(() => window.__typingTest.focus())
     await page.keyboard.type('unsaved closing test')
     await page.waitForTimeout(300)
-    await page.keyboard.press('Meta+w')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(600)
     const closeDialogTitle = await page.evaluate(() => document.querySelector('.dialog h2')?.textContent ?? '')
     check('⌘W with unsaved changes asks before closing', /unsaved/i.test(closeDialogTitle), closeDialogTitle)
@@ -304,6 +310,10 @@ async function main() {
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`)
   if (failed.length) process.exitCode = 1
+
+  // Every app instance has been closed above; exit explicitly so a lingering
+  // child process handle cannot hang the run after the results are printed.
+  process.exit(failed.length ? 1 : 0)
 }
 
 main().catch((err) => {

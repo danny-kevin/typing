@@ -33,8 +33,14 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, '../..')
-const appPath = process.argv[2] ?? join(projectRoot, 'release/mac-arm64/Typing.app')
-const executablePath = join(appPath, 'Contents/MacOS/Typing')
+const appPath =
+  process.env.TYPING_APP ??
+  process.argv[2] ??
+  join(projectRoot, 'release', process.platform === 'darwin' ? 'mac-arm64/Typing.app' : 'win-unpacked')
+// The packaged app lives in a bundle on macOS and in a plain folder on Windows/Linux.
+const executablePath =
+  process.env.TYPING_EXE ??
+  (process.platform === 'darwin' ? join(appPath, 'Contents/MacOS/Typing') : join(appPath, 'Typing.exe'))
 
 const results = []
 function check(name, ok, detail = '') {
@@ -499,7 +505,7 @@ async function main() {
     const { app, page } = await launch(dir, 'source.md', HEADINGS_DOC)
     try {
       await page.evaluate(() => window.__typingTest.focus())
-      await page.keyboard.press('Meta+/')
+      await page.keyboard.press('ControlOrMeta+/')
       await page.waitForTimeout(500)
       const decorated = await page.evaluate(() => document.querySelectorAll('.cm-heading').length)
       check('source mode removes heading decorations', decorated === 0, `${decorated} decorated lines`)
@@ -621,6 +627,10 @@ async function main() {
     for (const f of failed) console.log(` - ${f.name} ${f.detail}`)
     process.exitCode = 1
   }
+
+  // Every app instance has been closed above; exit explicitly so a lingering
+  // child process handle cannot hang the run after the results are printed.
+  process.exit(failed.length ? 1 : 0)
 }
 
 main().catch((err) => {

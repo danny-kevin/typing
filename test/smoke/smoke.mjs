@@ -20,8 +20,14 @@ const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, '../..')
 
-const appPath = process.argv[2] ?? join(projectRoot, 'release/mac-arm64/Typing.app')
-const executablePath = join(appPath, 'Contents/MacOS/Typing')
+const appPath =
+  process.env.TYPING_APP ??
+  process.argv[2] ??
+  join(projectRoot, 'release', process.platform === 'darwin' ? 'mac-arm64/Typing.app' : 'win-unpacked')
+// The packaged app lives in a bundle on macOS and in a plain folder on Windows/Linux.
+const executablePath =
+  process.env.TYPING_EXE ??
+  (process.platform === 'darwin' ? join(appPath, 'Contents/MacOS/Typing') : join(appPath, 'Typing.exe'))
 
 const results = []
 function check(name, condition, detail = '') {
@@ -93,15 +99,15 @@ async function main() {
 
     // Type at the end of the document body.
     await page.locator('.cm-content').click()
-    await page.keyboard.press('Meta+ArrowDown')
-    await page.keyboard.press('Meta+ArrowDown')
+    await page.keyboard.press('ControlOrMeta+ArrowDown')
+    await page.keyboard.press('ControlOrMeta+ArrowDown')
     await page.keyboard.type('\n\nSmoke test insertion ✓\n')
     await page.waitForTimeout(300)
 
     const title = await page.evaluate(() => document.title)
     check('window title shows dirty state', title.startsWith('•'), title)
 
-    await page.keyboard.press('Meta+S')
+    await page.keyboard.press('ControlOrMeta+S')
     // Wait for the save to be reflected in the title instead of assuming a fixed
     // delay: on a loaded machine the write can take longer than a second.
     await page
@@ -119,15 +125,15 @@ async function main() {
     check('title clears the dirty flag after save', !afterSaveTitle.startsWith('•'), afterSaveTitle)
 
     // Source mode toggle.
-    await page.keyboard.press('Meta+/')
+    await page.keyboard.press('ControlOrMeta+/')
     await page.waitForTimeout(500)
     const sourceClass = await page.evaluate(() => document.documentElement.classList.contains('source-mode'))
     check('⌘/ toggles source mode', sourceClass)
-    await page.keyboard.press('Meta+/')
+    await page.keyboard.press('ControlOrMeta+/')
     await page.waitForTimeout(300)
 
     // Find bar.
-    await page.keyboard.press('Meta+f')
+    await page.keyboard.press('ControlOrMeta+f')
     await page.waitForTimeout(300)
     const findVisible = await page.evaluate(() => !document.querySelector('#findbar')?.classList.contains('hidden'))
     check('⌘F opens the find bar', findVisible)
@@ -148,7 +154,7 @@ async function main() {
     // to checking the current document's file instead.
     const statBefore = await fs.stat(samplePath)
     const bytesBefore = await fs.readFile(samplePath)
-    await page.keyboard.press('Meta+S')
+    await page.keyboard.press('ControlOrMeta+S')
     await page.waitForTimeout(800)
     const bytesAfter = await fs.readFile(samplePath)
     const statAfter = await fs.stat(samplePath)
@@ -175,6 +181,10 @@ async function main() {
     for (const f of failed) console.log(` - ${f.name} ${f.detail}`)
     process.exitCode = 1
   }
+
+  // Every app instance has been closed above; exit explicitly so a lingering
+  // child process handle cannot hang the run after the results are printed.
+  process.exit(failed.length ? 1 : 0)
 }
 
 main().catch((err) => {

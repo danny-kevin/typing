@@ -3,18 +3,26 @@
 Typing opens ordinary markdown files. There is no library, no vault and no
 database: a document is the file you opened.
 
+Shortcuts below are written for macOS. **On Windows every `⌘` (Command) becomes
+`Ctrl` and every `⌥` (Option) becomes `Alt`**; `⇧` is Shift, `↩` is Enter, and
+`F8`/`F9` are the same keys on both platforms. So `⇧⌥⌘O` is
+`Ctrl+Alt+Shift+O` and `⌥⌘T` is `Ctrl+Alt+T`. `Help ▸ Keyboard Shortcuts` and the
+toolbar tooltips always show the shortcuts of the platform you are running on.
+The [Windows shortcut table](#windows-shortcuts) at the end lists them all.
+
 ## Opening and saving
 
 | Action | How |
 | --- | --- |
-| New document | `⌘N` |
-| Open a file | `⌘O`, or drag a `.md` file onto the window or the Dock icon |
-| Open a folder | `⇧⌥⌘O`, or drag a folder onto the Dock icon |
-| Quick open (folder) | `⇧⌘O`, type part of a filename, `↩` |
+| New document | `⌘N` (`Ctrl+N`) |
+| Open a file | `⌘O` (`Ctrl+O`), or drag a `.md` file onto the window or the Dock icon |
+| Open a folder | `⇧⌥⌘O` (`Ctrl+Alt+Shift+O`), or drag a folder onto the Dock icon |
+| Quick open (folder) | `⇧⌘O` (`Ctrl+Shift+O`), type part of a filename, `↩` |
 | Recent files | File ▸ Recent Files… |
-| Save | `⌘S` |
-| Save as | `⇧⌘S` |
+| Save | `⌘S` (`Ctrl+S`) |
+| Save as | `⇧⌘S` (`Ctrl+Shift+S`) |
 | Revert to saved | File ▸ Revert to Saved |
+| Open from the command line | `Typing.exe "C:\path\to\note.md"` (also accepts a folder) |
 
 Saving is quiet: if the bytes on disk already match the document, nothing is
 written at all (the file's modification time stays put, and a file that mixes
@@ -65,7 +73,12 @@ move away and they fade.
   Pasting a URL over a selection turns the selection into a link.
 - Pasting or dropping an image saves it to an `assets/` folder next to your
   document and inserts a relative link. (Save the document first — Typing needs a
-  location for the image.)
+  location for the image.) Links inside the document are always written with
+  forward slashes, so the same file renders on macOS and Windows.
+- On Windows, `Ctrl+Alt+…` combinations and the plain-`Ctrl` shortcuts work the
+  same way; if a shortcut collides with your IME (some Chinese input methods use
+  `Ctrl+Space`/`Ctrl+,`), the IME wins while it is composing and the editor does
+  not touch the keystroke.
 
 ## Tables
 
@@ -101,7 +114,8 @@ Both render in place and switch back to source when you put the caret in them.
 | Focus mode (dim everything but the current block) | `F8` |
 | Typewriter mode (keep the caret centred) | `F9` |
 
-The word count, cursor position and save state live in the status bar. The outline
+The word count, cursor position and save state live in the status bar (the file
+path is shown with `~` for your home folder on both platforms). The outline
 follows the cursor and jumps when clicked.
 
 ## Find and replace
@@ -130,7 +144,7 @@ to the file until you press `⌘S`.
 
 ## Keyboard shortcuts, in one place
 
-`Help ▸ Keyboard Shortcuts` lists everything; the full set:
+`Help ▸ Keyboard Shortcuts` lists everything; the full set on macOS:
 
 ```
 New ⌘N · Open ⌘O · Open folder ⇧⌥⌘O · Quick open ⇧⌘O · Save ⌘S · Save as ⇧⌘S
@@ -143,3 +157,41 @@ Bullet list ⌥⌘U · Ordered list ⌥⌘O · Task list ⌥⌘X · Indent ⌘] 
 Table row ⌘↩ · Table column ⇧⌘↩
 Export HTML ⇧⌘E · Export PDF ⌥⌘P · Preferences ⌘,
 ```
+
+## Windows shortcuts
+
+The same commands on Windows 10/11, as the menu bar and `Help ▸ Keyboard
+Shortcuts` show them:
+
+```
+New Ctrl+N · Open Ctrl+O · Open folder Ctrl+Alt+Shift+O · Quick open Ctrl+Shift+O
+Save Ctrl+S · Save as Ctrl+Shift+S · Close window Ctrl+W
+Source mode Ctrl+/ · Outline Ctrl+Shift+1 · Sidebar Ctrl+Shift+2 · Focus F8 · Typewriter F9
+Find Ctrl+F · Replace Ctrl+Alt+F · Next Ctrl+G · Previous Ctrl+Shift+G
+Bold Ctrl+B · Italic Ctrl+I · Strikethrough Ctrl+Shift+X · Inline code Ctrl+E
+Link Ctrl+K · Image Ctrl+Shift+I
+Code block Ctrl+Alt+C · Quote Ctrl+Alt+Q · Table Ctrl+Alt+T · Maths Ctrl+Alt+M
+Headings Ctrl+1…Ctrl+6 · Paragraph Ctrl+0
+Bullet list Ctrl+Alt+U · Ordered list Ctrl+Alt+O · Task list Ctrl+Alt+X
+Indent Ctrl+] · Outdent Ctrl+[
+Table row Ctrl+Enter · Table column Ctrl+Shift+Enter
+Export HTML Ctrl+Shift+E · Export PDF Ctrl+Alt+P · Preferences Ctrl+,
+Full screen F11 · View ▸ Zoom In / Zoom Out · Reset zoom Ctrl+Alt+0
+```
+
+Notes for Windows:
+
+- The menu bar is the native one: `Alt` reaches File, Edit, View, Format, Table and
+  Help, and each item has its own underlined letter. Preferences live in
+  `File ▸ Preferences…` (there is no macOS-style application menu) and About
+  lives in Help.
+- `File ▸ Exit`, the window's ✕ button, `Alt+F4` and `Ctrl+W` all ask before
+  closing a document with unsaved changes.
+- Undo/redo are `Ctrl+Z` / `Ctrl+Shift+Z`; `Ctrl+Y` is not bound.
+- On keyboard layouts where AltGr is reported as `Ctrl+Alt` (German, Polish,
+  French, …), a `Ctrl+Alt+…` shortcut can be swallowed by the layout instead of
+  reaching the app. The same commands are in the menus, so nothing is unfixable;
+  tell me if you want a different binding for your layout.
+- Everything else — autosave, recovery, external-change prompts, export, the
+  `assets/` folder for pasted images, recent files — behaves exactly as described
+  above; the settings and recovery drafts live in `%APPDATA%\Typing`.
