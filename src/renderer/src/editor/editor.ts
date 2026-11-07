@@ -23,6 +23,7 @@ import { smartPasteExtension } from './smart-paste'
 import { listKeymap } from './list-keys'
 import { currentMatchField, searchHighlightField } from '../search'
 import { editorDocPath } from './widgets'
+import { historyFormatEffect, historyFormatExtension } from '../history-format'
 
 export interface EditorHooks {
   onChange: () => void
@@ -59,7 +60,7 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
   const pathConf = new Compartment()
 
   const updateListener = EditorView.updateListener.of((u) => {
-    if (u.docChanged) hooks.onChange()
+    if (u.docChanged || u.transactions.some(tr => tr.effects.some(effect => effect.is(historyFormatEffect)))) hooks.onChange()
     if (u.selectionSet || u.docChanged) hooks.onSelection()
     if (u.focusChanged) (u.view.hasFocus ? hooks.onFocus : hooks.onBlur)()
   })
@@ -68,6 +69,7 @@ export function createEditor(parent: HTMLElement, hooks: EditorHooks): EditorCon
     doc: '',
     extensions: [
       historyConf.of(history()),
+      historyFormatExtension,
       pathConf.of(editorDocPath.of('')),
       drawSelection(),
       dropCursor(),

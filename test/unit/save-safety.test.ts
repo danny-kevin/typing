@@ -5,6 +5,30 @@ import { join } from 'node:path'
 import { writeDocument, hashBytes, type SaveRequest } from '../../src/main/save-doc'
 import { decodeDoc } from '../../src/shared/doc'
 
+it('publishes exact saved bytes to history without waiting for or rejecting its failure', async () => {
+  const path = target('history-save.md')
+  const seen: Uint8Array[] = []
+  const result = await writeDocument({ path, text: 'a\nb\nc\n', eol: '\r\n', bom: true, lineEndings: 'clr' }, {
+    afterSave: (_path, bytes) => { seen.push(bytes); throw new Error('history unavailable') }
+  })
+  expect(result.ok).toBe(true)
+  expect(Buffer.from(seen[0])).toEqual(Buffer.from('\ufeffa\r\nb\nc\r'))
+  expect(await fs.readFile(path)).toEqual(Buffer.from(seen[0]))
+})
+
+it('restores encoding-only changes and exact mixed endings without bypassing conflicts', async () => {
+  const path = target('history-encoding.md')
+  await fs.writeFile(path, 'a\nb\nc\n')
+  const request = await requestFor('history-encoding.md', 'a\nb\nc\n', { bom: true, lineEndings: 'clr' })
+  const saved = await writeDocument(request)
+  expect(saved.ok).toBe(true)
+  expect(await fs.readFile(path)).toEqual(Buffer.from('\ufeffa\r\nb\nc\r'))
+  await fs.writeFile(path, 'external writer')
+  const blocked = await writeDocument({ ...request, onConflict: 'report' })
+  expect(blocked.ok).toBe(false)
+  expect(await fs.readFile(path, 'utf8')).toBe('external writer')
+})
+
 let dir = ''
 
 beforeAll(async () => {

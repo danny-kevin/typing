@@ -75,6 +75,8 @@ export type FileResult = FileReadResult | FileError
 
 export interface SaveResult {
   ok: true
+  eol: Eol
+  bom: boolean
   path: string
   mtimeMs: number
   size: number
@@ -128,6 +130,12 @@ export type ApiMethod =
   | 'dialog.openFolder'
   | 'dialog.pickImage'
   | 'dialog.saveAs'
+  | 'history.list'
+  | 'history.read'
+  | 'history.capture'
+  | 'history.configure'
+  | 'history.disable'
+  | 'history.clear'
   | 'file.read'
   | 'file.peek'
   | 'file.resolve'

@@ -1,6 +1,11 @@
 import './style.css'
 import 'katex/dist/katex.min.css'
 import { EditorView } from '@codemirror/view'
+import { Transaction } from '@codemirror/state'
+import { isolateHistory } from '@codemirror/commands'
+import { encodeDoc, type EncodableDoc } from '../../shared/doc'
+import type { HistoryReason } from '../../shared/history'
+import { effectiveFormat, historyFormat, historyFormatEffect } from './history-format'
 import type { Prefs, FileReadResult, SaveOutcome } from '../../shared/types'
 import { DEFAULT_PREFS } from '../../shared/types'
 import type { Eol } from '../../shared/doc'
@@ -66,6 +71,7 @@ interface DocState {
   autosaveTimer: number
   draftTimer: number
   saveTask?: Promise<boolean>
+  historyTask?: Promise<boolean>
   scrollSnapshot?: ReturnType<EditorView['scrollSnapshot']>
   scrollDoc?: EditorView['state']['doc']
 }
@@ -217,8 +223,25 @@ async function setPrefs(patch: Partial<Prefs>): Promise<void> {
 // Document lifecycle
 // ---------------------------------------------------------------------------
 
+function documentFormat(target = doc): EncodableDoc {
+  return effectiveFormat(target.editor.view.state, { text: target.savedText, eol: target.eol, bom: target.bom, lineEndings: target.lineEndings })
+}
+
 function isDirty(target = doc): boolean {
-  return target.editor.getText() !== target.savedText
+  if (target.editor.getText() !== target.savedText) return true
+  const format = documentFormat(target)
+  return format.bom !== target.bom || format.eol !== target.eol || format.lineEndings !== target.lineEndings
+}
+
+/** Snapshot only at the destructive overwrite boundary; edits during I/O abort it. */
+async function beforeOverwrite(target: DocState, reason: HistoryReason): Promise<boolean> {
+  const state = target.editor.view.state
+  const generation = target.generation
+  const path = target.path
+  if (!path) return false
+  cancelPendingWrites(target)
+  await api.call('history.capture', path, documentFormat(target), reason).catch(error => console.warn('History unavailable', error))
+  return tabs.items.includes(target) && target.path === path && target.generation === generation && target.editor.view.state.doc === state.doc && target.editor.view.state.field(historyFormat) === state.field(historyFormat)
 }
 
 function onDocChange(target = doc): void {
@@ -254,7 +277,7 @@ function scheduleOutline(): void {
 
 function scheduleAutosave(target = doc): void {
   if (target.autosaveTimer) window.clearTimeout(target.autosaveTimer)
-  if (target.closing || closingWindow || !prefs.autoSave || !target.path || !target.validUtf8 || target.externalChange) return
+  if (target.closing || closingWindow || !prefs.autoSave || !target.path || !target.validUtf8 || target.externalChange || target.historyTask) return
   target.autosaveTimer = window.setTimeout(() => {
     target.autosaveTimer = 0
     if (isDirty(target)) void save(false, { autosave: true }, target)
@@ -357,6 +380,7 @@ function setDocument(text: string, meta: Partial<DocState> & { path: string | nu
   target.loading = true
   target.editor.setPath(meta.path ?? '')
   target.editor.setText(text)
+  target.editor.view.dispatch({ effects: historyFormatEffect.of({ text, eol: target.eol, bom: target.bom, lineEndings: target.lineEndings }), annotations: Transaction.addToHistory.of(false) })
   target.loading = false
   target.savedText = target.editor.getText()
   void api.call('recovery.clear', target.id)
@@ -560,6 +584,7 @@ async function closeTab(target = doc): Promise<void> {
   target.closing = true
   cancelPendingWrites(target)
   try {
+    if (target.historyTask) await target.historyTask
     if (target.saveTask) await target.saveTask
     if (!(await guardUnsavedWork(target))) return
     await disposeTab(target)
@@ -571,7 +596,7 @@ async function closeTab(target = doc): Promise<void> {
   }
 }
 
-type OpenOptions = { alreadyGuarded?: boolean; target?: DocState }
+type OpenOptions = { alreadyGuarded?: boolean; target?: DocState; historyReason?: HistoryReason }
 let opening = Promise.resolve(true)
 function openFile(path: string, options: OpenOptions = {}): Promise<boolean> {
   const task = opening.catch(() => false).then(() => openFileInTab(path, options))
@@ -598,6 +623,11 @@ async function openFileInTab(path: string, options: OpenOptions): Promise<boolea
   if (options.alreadyGuarded) {
     const target = options.target ?? doc
     if (!tabs.items.includes(target)) return false
+    if (target.saveTask) await target.saveTask
+    if (!(await beforeOverwrite(target, options.historyReason ?? 'before-reload'))) {
+      ui.toast('Reload cancelled because the document changed while history was being saved.')
+      return false
+    }
     setDocument(result.text, meta, target)
   } else {
     const empty = doc.path === null && !doc.touched && !isDirty() && !editor.getText()
@@ -644,6 +674,7 @@ interface SaveOptions {
 }
 
 function save(saveAs = false, options: SaveOptions = {}, target = doc): Promise<boolean> {
+  if (target.historyTask) return Promise.resolve(false)
   if (target.saveTask) return target.saveTask.then(ok => ok && !isDirty(target))
   const task = saveSnapshot(saveAs, options, target)
   target.saveTask = task
@@ -664,7 +695,7 @@ async function saveSnapshot(saveAs: boolean, options: SaveOptions, target: DocSt
   const text = editor.getText()
   const baseMtimeMs = doc.baseMtimeMs
   const baseHash = doc.baseHash
-  const { eol, bom } = doc
+  const { eol, bom, lineEndings } = documentFormat(target)
 
   let path = doc.path
   if (!path || saveAs) {
@@ -698,6 +729,7 @@ async function saveSnapshot(saveAs: boolean, options: SaveOptions, target: DocSt
     baseHash,
     eol,
     bom,
+    lineEndings,
     force: saveAs,
     acceptInvalidUtf8: options.acceptInvalidUtf8 === true,
     onConflict: options.autosave ? 'report' : 'copy'
@@ -731,6 +763,9 @@ async function saveSnapshot(saveAs: boolean, options: SaveOptions, target: DocSt
     doc.baseMtimeMs = result.mtimeMs
     doc.baseHash = result.hash
     doc.lineEndings = result.lineEndings
+    doc.eol = result.eol
+    doc.bom = result.bom
+    target.editor.view.dispatch({ effects: historyFormatEffect.of({ text, eol: result.eol, bom: result.bom, lineEndings: result.lineEndings }), annotations: Transaction.addToHistory.of(false) })
     doc.savedText = text
     doc.externalChange = false
     doc.deleted = false
@@ -752,6 +787,9 @@ async function saveSnapshot(saveAs: boolean, options: SaveOptions, target: DocSt
   doc.baseMtimeMs = result.mtimeMs
   doc.baseHash = result.hash
   doc.lineEndings = result.lineEndings
+  doc.eol = result.eol
+  doc.bom = result.bom
+  target.editor.view.dispatch({ effects: historyFormatEffect.of({ text, eol: result.eol, bom: result.bom, lineEndings: result.lineEndings }), annotations: Transaction.addToHistory.of(false) })
   doc.savedText = text
   doc.externalChange = false
   doc.deleted = false
@@ -831,8 +869,76 @@ async function revertToSaved(): Promise<void> {
   if (!target.path) return
   const ok = await ui.confirmDialog('Revert to Saved', 'Discard your changes and reload the file from disk?', 'Revert')
   if (!ok) return
-  await openFile(target.path, { alreadyGuarded: true, target })
+  await openFile(target.path, { alreadyGuarded: true, target, historyReason: 'before-revert' })
   persistDraft(target)
+}
+
+/** Restore never writes the file directly or opts out of any save protection. */
+function restoreHistory(id: string, target = doc): Promise<boolean> {
+  if (target.historyTask || target.closing || closingWindow) return Promise.resolve(false)
+  const task = restoreHistorySnapshot(id, target)
+  target.historyTask = task
+  cancelPendingWrites(target)
+  void task.finally(() => {
+    if (target.historyTask === task) target.historyTask = undefined
+    if (tabs.items.includes(target)) { scheduleAutosave(target); scheduleDraft(target) }
+  }).catch(() => {})
+  return task
+}
+
+async function restoreHistorySnapshot(id: string, target: DocState): Promise<boolean> {
+  if (target.saveTask) await target.saveTask
+  const path = target.path
+  const generation = target.generation
+  if (!path || !tabs.items.includes(target)) return false
+  const safe = (): boolean => tabs.items.includes(target) && target.path === path && target.generation === generation && !target.externalChange && !target.deleted && target.validUtf8
+  const blocked = (): false => {
+    ui.toast('Restore is unavailable: the file changed, was deleted, or is not valid UTF-8. Reload safely or copy the snapshot to a new tab.', 6500)
+    return false
+  }
+  if (!safe()) return blocked()
+  const snapshot = await api.call('history.read', path, id) as (EncodableDoc & { validUtf8: boolean }) | null
+  if (!snapshot) { ui.toast('That snapshot is no longer available.'); return false }
+  if (!snapshot.validUtf8) { ui.toast('This snapshot contains invalid UTF-8. Copy it to a new tab instead; the original will not be overwritten.', 6500); return false }
+  const disk = await api.call('file.peek', path) as FileReadResult
+  if (!safe() || !disk.ok || !disk.validUtf8 || disk.hash !== target.baseHash) {
+    if (tabs.items.includes(target)) await promptExternalChange(target)
+    return blocked()
+  }
+  const state = target.editor.view.state
+  if (!(await beforeOverwrite(target, 'before-restore'))) return false
+  const verified = await api.call('file.peek', path) as FileReadResult
+  if (!safe() || !verified.ok || !verified.validUtf8 || verified.hash !== target.baseHash) {
+    if (tabs.items.includes(target)) await promptExternalChange(target)
+    return blocked()
+  }
+  if (target.editor.view.state.doc !== state.doc || target.editor.view.state.field(historyFormat) !== state.field(historyFormat)) {
+    ui.toast('Restore cancelled because you edited the document while history was being saved.'); return false
+  }
+  target.generation++
+  target.editor.view.dispatch({
+    changes: { from: 0, to: state.doc.length, insert: snapshot.text },
+    effects: historyFormatEffect.of(snapshot),
+    annotations: [isolateHistory.of('full'), Transaction.userEvent.of('input.historyRestore')],
+    selection: { anchor: 0 }, scrollIntoView: true
+  })
+  persistDraft(target)
+  ui.toast('Snapshot restored in the editor. Undo is available; save when ready.')
+  return true
+}
+
+async function copyHistory(id: string, target = doc): Promise<boolean> {
+  const path = target.path
+  if (!path || closingWindow || guardInFlight) return false
+  const snapshot = await api.call('history.read', path, id) as (EncodableDoc & { validUtf8: boolean }) | null
+  if (!snapshot || closingWindow) return false
+  const copy = createDocument('', { path: null, eol: snapshot.eol, bom: snapshot.bom })
+  copy.editor.view.dispatch({ changes: { from: 0, insert: snapshot.text }, effects: historyFormatEffect.of(snapshot), annotations: isolateHistory.of('full') })
+  copy.touched = true
+  persistDraft(copy)
+  updateTitle(); updateStatus()
+  if (!snapshot.validUtf8) ui.toast('Copied decoded text only; invalid UTF-8 bytes cannot be copied into an editor.', 5000)
+  return true
 }
 
 function showDeletedBanner(): void {
@@ -858,10 +964,11 @@ async function onExternalChange(path: string): Promise<void> {
     return
   }
   if (result.hash === target.baseHash) return
-  if (!isDirty(target) && !closingWindow) {
+  if (!isDirty(target) && !closingWindow && !target.historyTask) {
     const view = target.editor.view
     const scrollTop = view.scrollDOM.scrollTop
     const selection = view.state.selection.main
+    if (!(await beforeOverwrite(target, 'before-reload'))) { await promptExternalChange(target); return }
     setDocument(result.text, { ...result, baseMtimeMs: result.mtimeMs, baseHash: result.hash }, target)
     const length = view.state.doc.length
     view.dispatch({ selection: { anchor: Math.min(selection.anchor, length), head: Math.min(selection.head, length) } })
@@ -1532,6 +1639,7 @@ async function requestClose(): Promise<void> {
   try {
     for (const target of tabs.items) cancelPendingWrites(target)
     for (const target of tabs.items) {
+      if (target.historyTask) await target.historyTask
       if (target.saveTask) await target.saveTask
       if (!(await guardUnsavedWork(target))) return
       checked.set(target, target.editor.getText())

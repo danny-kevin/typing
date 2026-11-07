@@ -64,6 +64,12 @@ export class HistoryStore {
 
   private async load(): Promise<void> {
     if (/^(\\\\|\/\/)/.test(this.directory)) throw new Error('History requires a local user-data directory')
+    // Never follow a history symlink into a document or cloud folder. Common
+    // sync roots and network filesystems are deliberately unsupported.
+    const physicalParent = await fs.realpath(resolve(this.directory, '..'))
+    if (/(?:^|[\\/])(?:OneDrive[^\\/]*|Dropbox|CloudStorage|Mobile Documents|Google Drive)(?:[\\/]|$)/i.test(physicalParent)) throw new Error('History cannot be stored in a synced directory')
+    const stat = await fs.statfs(physicalParent)
+    if ([0x6969, 0x517b, 0xff534d42, 0xfe534d42, 0x364720].includes(Number(stat.type))) throw new Error('History cannot be stored on a network filesystem')
     await this.localDirectory(this.directory)
     await this.localDirectory(join(this.directory, 'blobs'))
     if (this.index) return
@@ -218,12 +224,24 @@ export class HistoryStore {
   clear(path?: string): Promise<boolean> {
     return this.run(false, async () => {
       if (path) {
-        const doc = this.index!.documents[(await this.identity(path)).key]
-        if (doc) doc.snapshots = []
-      } else for (const doc of Object.values(this.index!.documents)) doc.snapshots = []
+        const key = (await this.identity(path)).key
+        const doc = this.index!.documents[key]
+        if (doc?.disabled) doc.snapshots = []
+        else delete this.index!.documents[key]
+      } else for (const [key, doc] of Object.entries(this.index!.documents)) {
+        if (doc.disabled) doc.snapshots = []
+        else delete this.index!.documents[key]
+      }
       await this.commit(); return true
     })
   }
 
-  prune(): Promise<boolean> { return this.run(false, async () => { await this.commit(); return true }) }
+  prune(): Promise<boolean> {
+    return this.run(false, async () => {
+      const before = JSON.stringify(this.index)
+      this.pruneIndex()
+      if (JSON.stringify(this.index) !== before) await this.commit()
+      return true
+    })
+  }
 }

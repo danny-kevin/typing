@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto'
 import { promises as fs, watchFile, unwatchFile, existsSync, statSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
-import { decodeDoc } from '../shared/doc'
+import { decodeDoc, encodeDoc, type EncodableDoc } from '../shared/doc'
+import { HistoryStore } from './history-store'
+import type { HistoryConfig, HistoryReason } from '../shared/history'
 import { writeDocument, hashBytes, type SaveRequest } from './save-doc'
 import { isInsidePath } from '../shared/paths'
 import { pathFromAssetUrl } from '../shared/assets'
@@ -54,6 +56,8 @@ const userDataDir = (): string => app.getPath('userData')
 const prefsPath = (): string => join(userDataDir(), 'preferences.json')
 const recentsPath = (): string => join(userDataDir(), 'recent-files.json')
 const recoveryDir = (): string => join(userDataDir(), 'recovery')
+let history: HistoryStore | undefined
+const historyStore = (): HistoryStore => history ??= new HistoryStore(join(userDataDir(), 'history'))
 
 let prefsCache: Prefs | null = null
 
@@ -263,6 +267,29 @@ const handlers: Record<string, Handler> = {
   async 'file.exists'([path]) {
     return existsSync(String(path))
   },
+  async 'history.list'([path]) {
+    await historyStore().prune()
+    return historyStore().list(path ? String(path) : undefined)
+  },
+  async 'history.read'([path, id]) {
+    const bytes = await historyStore().read(String(path), String(id))
+    return bytes ? { ...decodeDoc(bytes), size: bytes.length } : null
+  },
+  async 'history.capture'([path, doc, reason]) {
+    if (!['before-reload', 'before-revert', 'before-restore'].includes(reason)) return false
+    const content = doc as EncodableDoc
+    if (typeof content?.text !== 'string' || content.text.length > 5 * 1024 * 1024) return false
+    return historyStore().capture(String(path), encodeDoc(content), reason as HistoryReason)
+  },
+  async 'history.configure'([patch]) {
+    return historyStore().configure(patch as Partial<HistoryConfig>)
+  },
+  async 'history.disable'([path, disabled]) {
+    return historyStore().setDisabled(String(path), Boolean(disabled))
+  },
+  async 'history.clear'([path]) {
+    return historyStore().clear(path ? String(path) : undefined)
+  },
   async 'file.save'([payload]) {
     return saveDocument(payload as SaveRequest)
   },
@@ -349,6 +376,7 @@ const handlers: Record<string, Handler> = {
   async 'window.close'([force]) {
     if (!mainWindow) return false
     if (!force) return false
+    await history?.flush()
     allowClose = true
     mainWindow.close()
     // A quit that was interrupted by the unsaved-changes guard completes here.
@@ -521,7 +549,9 @@ const handlers: Record<string, Handler> = {
 }
 
 async function saveDocument(p: SaveRequest): Promise<unknown> {
-  const result = await writeDocument(p)
+  const result = await writeDocument(p, {
+    afterSave: (path, bytes) => { void historyStore().capture(path, bytes, 'save') }
+  })
   if (result.ok) {
     if (result.conflictCopy) watchDocument(result.conflictCopy, result.mtimeMs, result.size)
     else watchDocument(result.path, result.mtimeMs, result.size)

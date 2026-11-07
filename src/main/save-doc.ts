@@ -36,6 +36,8 @@ export interface SaveRequest {
   baseHash?: string
   eol?: Eol
   bom?: boolean
+  /** Explicit per-line endings from an undoable history restore. */
+  lineEndings?: string
   /** Overwrite whatever is on disk (Save As onto an existing path). */
   force?: boolean
   /** The user explicitly agreed to replace bytes that are not valid UTF-8. */
@@ -59,6 +61,7 @@ export interface SaveSuccess {
   /** Per-line endings of the text now on disk ('c' CRLF, 'l' LF, 'r' lone CR). */
   lineEndings: string
   eol: Eol
+  bom: boolean
   /** True when the bytes already matched; nothing was written. */
   unchanged?: boolean
   /** Set when our version was written next to a file someone else changed. */
@@ -76,6 +79,8 @@ export interface SaveFailure {
 export type SaveResult = SaveSuccess | SaveFailure
 
 export interface SaveHooks {
+  /** Receives the exact successful bytes; never awaited and cannot fail a save. */
+  afterSave?: (path: string, bytes: Uint8Array) => void | Promise<unknown>
   /**
    * Called after the temporary file exists and before the atomic rename.
    * The unit tests use it to simulate a concurrent writer landing inside the
@@ -193,6 +198,13 @@ function changedSince(existing: Uint8Array, baseHash: string | undefined, baseMt
 
 export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {}): Promise<SaveResult> {
   const abs = resolve(request.path)
+  const saved = (result: SaveSuccess, bytes: Uint8Array): SaveSuccess => {
+    try {
+      const task = hooks.afterSave?.(result.conflictCopy ?? result.path, bytes)
+      if (task) void task.catch(() => {})
+    } catch { /* History is best effort, never part of a user save's outcome. */ }
+    return result
+  }
   try {
     const existing = await readOrNull(abs)
     const existingStat = existing ? await statOrNull(abs) : null
@@ -204,8 +216,8 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
       // Nothing to do: keep the bytes and the modification time exactly as they
       // are. This is what makes "open and save" a no-op for every encoding,
       // including files that mix CRLF, LF and lone CR.
-      if (request.text === disk.text) {
-        return {
+      if (request.text === disk.text && (request.lineEndings === undefined || (!disk.validUtf8 && request.lineEndings === disk.lineEndings && bom === disk.bom) || bytesEqual(existing, encodeDoc({ text: request.text, eol, bom, lineEndings: request.lineEndings })))) {
+        return saved({
           ok: true,
           path: abs,
           mtimeMs: existingStat?.mtimeMs ?? Date.now(),
@@ -213,8 +225,9 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
           hash: hashBytes(existing),
           lineEndings: disk.lineEndings,
           eol: disk.eol,
+          bom: disk.bom,
           unchanged: true
-        }
+        }, existing)
       }
 
       if (!disk.validUtf8 && !request.acceptInvalidUtf8 && !request.force) {
@@ -229,10 +242,10 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
       if (!request.force && changedSince(existing, request.baseHash, request.baseMtimeMs, existingStat?.mtimeMs ?? 0)) {
         if (request.onConflict === 'report') return conflictReport(abs)
         const copy = conflictCopyName(abs)
-        const lineEndings = remapLineEndings(disk.text, disk.lineEndings, request.text, eol)
+        const lineEndings = request.lineEndings ?? remapLineEndings(disk.text, disk.lineEndings, request.text, eol)
         const bytes = encodeDoc({ text: request.text, eol, lineEndings, bom })
         const written = await fs.writeFile(copy, bytes).then(() => statOrNull(copy))
-        return {
+        return saved({
           ok: true,
           path: abs,
           mtimeMs: written?.mtimeMs ?? Date.now(),
@@ -240,15 +253,16 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
           hash: hashBytes(bytes),
           lineEndings,
           eol,
+          bom,
           conflictCopy: copy
-        }
+        }, bytes)
       }
     }
 
-    const lineEndings = remapLineEndings(disk.text, disk.lineEndings, request.text, eol)
+    const lineEndings = request.lineEndings ?? remapLineEndings(disk.text, disk.lineEndings, request.text, eol)
     const bytes = encodeDoc({ text: request.text, eol, lineEndings, bom })
     if (existing && bytesEqual(bytes, existing)) {
-      return {
+      return saved({
         ok: true,
         path: abs,
         mtimeMs: existingStat?.mtimeMs ?? Date.now(),
@@ -256,8 +270,9 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
         hash: hashBytes(existing),
         lineEndings,
         eol,
+        bom,
         unchanged: true
-      }
+      }, existing)
     }
 
     // Re-check immediately before the rename: a write that lands while our
@@ -273,7 +288,7 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
       if (request.onConflict === 'report') return conflictReport(abs)
       const copy = conflictCopyName(abs)
       await fs.writeFile(copy, bytes)
-      return {
+      return saved({
         ok: true,
         path: abs,
         mtimeMs: (await statOrNull(copy))?.mtimeMs ?? Date.now(),
@@ -281,13 +296,14 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
         hash: hashBytes(bytes),
         lineEndings,
         eol,
+        bom,
         conflictCopy: copy
-      }
+      }, bytes)
     }
     // `recreated` tells the renderer to say so: the file was there when it was
     // opened (so a hash or an mtime came with the request) and is not there now.
     const recreated = written.recreated || (!existing && Boolean(request.baseHash ?? request.baseMtimeMs))
-    return {
+    return saved({
       ok: true,
       path: abs,
       mtimeMs: written.mtimeMs,
@@ -295,8 +311,9 @@ export async function writeDocument(request: SaveRequest, hooks: SaveHooks = {})
       hash: hashBytes(bytes),
       lineEndings,
       eol,
+      bom,
       ...(recreated ? { recreated } : {})
-    }
+    }, bytes)
   } catch (err) {
     const e = err as NodeJS.ErrnoException
     return { ok: false, error: e.message, code: e.code }
