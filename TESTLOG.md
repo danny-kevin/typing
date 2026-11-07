@@ -113,7 +113,7 @@ Node 26.4.0, 2026-11-07):
 | `npm run smoke` | 14/14 checks |
 | `npm run smoke:features` | 28/28 checks |
 | `npm run smoke:caret` | 27/27 checks |
-| `npm run smoke:datasafety` | 61/61 checks (section 5) |
+| `npm run smoke:datasafety` | 63/63 checks (section 5) |
 
 ## 5. Data safety — `npm run smoke:datasafety`
 
@@ -123,12 +123,12 @@ its own `--user-data-dir`, so Electron's single-instance lock can never answer f
 a run) and drives the real UI:
 
 ```
-61/61 checks passed
+63/63 checks passed
 ```
 
 | Group | Checks |
 | --- | --- |
-| Unsaved-work guard | `⌘N` on an untitled draft asks `Save / Don't Save / Cancel`; Cancel keeps the draft; a cancelled Save As keeps the draft *and* aborts the switch; Save on an untitled draft goes through Save As, writes the file and only then switches; a named dirty document asks too, Cancel writes nothing, Don't Save discards, Save writes first; quick open asks before replacing unsaved work; `⌘W` asks through the same guard; a pending autosave is dropped when the document is left |
+| Unsaved-work guard | `⌘N` on an untitled draft asks `Save / Don't Save / Cancel`; Cancel keeps the draft; a cancelled Save As keeps the draft *and* aborts the switch; Save on an untitled draft goes through Save As, writes the file and only then switches; a named dirty document asks too, Cancel writes nothing, Don't Save discards, Save writes first; quick open asks before replacing unsaved work; a file delivered over the `open-file` event (the path the Finder and the Dock use) asks first too; `⌘W` asks through the same guard; a pending autosave is dropped when the document is left |
 | Undo / in-flight saves | `⌘Z` after switching documents does not restore the previous file; a save started for one file writes that file and never the one opened next; the editor shows the document opened last |
 | Mixed line endings | `one\r\ntwo\r\nthree\n` keeps its exact bytes on open + save *and* its mtime; an edit keeps CRLF/LF and gives the new line the dominant CRLF; a BOM + mixed-ending file is unchanged on open + save, and after an edit keeps one BOM and every original ending |
 | Non-UTF-8 files | opening warns; `⌘S` leaves the bytes alone and offers Save As; `file.save` refuses with `code: invalid-utf8`; explicit consent writes valid UTF-8 |

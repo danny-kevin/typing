@@ -269,6 +269,26 @@ console.log('\n1. Unsaved-work guard')
     await clickDialog(page, 'Cancel')
     check('Cancel from quick open keeps the edited document', (await text(page)).includes('QUICK_OPEN_EDIT'))
 
+    // ---- a file opened from the Finder / the Dock -----------------------
+    // The same IPC path the OS uses: main receives `open-file` and asks the
+    // renderer to open the path, which must go through the guard as well.
+    await page.evaluate(() => {
+      void window.__typingTest.newDocument()
+    })
+    await page.waitForTimeout(500)
+    if (await dialogTitle(page)) await clickDialog(page, "Don't Save")
+    await page.waitForTimeout(400)
+    await page.locator('.cm-content').click()
+    await page.keyboard.type('FINDER_OPEN_DRAFT')
+    await page.waitForTimeout(250)
+    await app.evaluate(({ app }, path) => {
+      app.emit('open-file', { preventDefault() {} }, path)
+    }, docPath('second.md'))
+    await page.waitForTimeout(700)
+    check('a file opened from the Finder or the Dock asks first', /unsaved/i.test((await dialogTitle(page)) ?? ''))
+    await clickDialog(page, 'Cancel')
+    check('cancelling that keeps the draft in the editor', (await text(page)).includes('FINDER_OPEN_DRAFT'))
+
     // ---- window close ---------------------------------------------------
     await poke(page)
     await page.keyboard.press('Meta+w')
@@ -277,7 +297,7 @@ console.log('\n1. Unsaved-work guard')
     await clickDialog(page, 'Cancel')
     check(
       'cancelling ⌘W keeps the window and the text',
-      (await page.locator('.cm-content').count()) === 1 && (await text(page)).includes('QUICK_OPEN_EDIT')
+      (await page.locator('.cm-content').count()) === 1 && (await text(page)).includes('FINDER_OPEN_DRAFT')
     )
 
     check('no renderer errors during the guard checks', logs.length === 0, logs.slice(0, 2).join(' | '))
