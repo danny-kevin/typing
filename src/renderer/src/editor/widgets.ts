@@ -220,12 +220,12 @@ export class MermaidWidget extends WidgetType {
 // ---------------------------------------------------------------------------
 
 export class ImageWidget extends WidgetType {
-  constructor(readonly url: string, readonly alt: string, readonly title?: string) {
+  constructor(readonly url: string, readonly alt: string, readonly title?: string, readonly docPath = '') {
     super()
   }
 
   override eq(other: ImageWidget): boolean {
-    return other.url === this.url && other.alt === this.alt && other.title === this.title
+    return other.url === this.url && other.alt === this.alt && other.title === this.title && other.docPath === this.docPath
   }
 
   override toDOM(view: EditorView): HTMLElement {

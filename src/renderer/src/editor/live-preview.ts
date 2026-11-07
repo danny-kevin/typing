@@ -12,7 +12,8 @@ import {
   MermaidWidget,
   TableWidget,
   resolveAssetUrl,
-  renderMathHtml
+  renderMathHtml,
+  editorDocPath
 } from './widgets'
 
 interface Options {
@@ -332,7 +333,7 @@ export function buildLivePreview(view: EditorView): PreviewBuild {
         case 'image': {
           ranges.push(
             Decoration.replace({
-              widget: new ImageWidget(span.url ?? '', span.alt ?? '', span.title)
+              widget: new ImageWidget(span.url ?? '', span.alt ?? '', span.title, view.state.facet(editorDocPath))
             }).range(span.from, span.to)
           )
           break
@@ -458,8 +459,9 @@ const driver = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate): void {
-      if (update.docChanged) this.docVersion++
-      if (update.docChanged || update.selectionSet) {
+      const pathChanged = update.startState.facet(editorDocPath) !== update.state.facet(editorDocPath)
+      if (update.docChanged || pathChanged) this.docVersion++
+      if (update.docChanged || update.selectionSet || pathChanged) {
         const signature = this.signature(update.view)
         if (signature !== this.lastSignature) {
           this.lastSignature = signature

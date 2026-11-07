@@ -113,13 +113,24 @@ try {
   await fs.writeFile(script, rescued)
   await closeAnswer(page, 'Save')
   check('Save As writes correct untitled and then closes it', (await fs.readFile(rescued, 'utf8')) === 'UNTITLED_SAVE' && (await tabState(page)).length === 2)
-  await fs.writeFile(script, join('/dev/null', 'cannot-save.md'))
+  const notDirectory = join(work, 'not-a-directory')
+  await fs.writeFile(notDirectory, 'file')
+  await fs.writeFile(script, join(notDirectory, 'cannot-save.md'))
   await t(page, 'newDocument')
   await insert(page, 'FAILED_SAVE')
   await closeAnswer(page, 'Save')
   check('failed save aborts close and keeps text', (await text(page)) === 'FAILED_SAVE')
   await closeAnswer(page, "Don't Save")
   await fs.writeFile(script, 'canceled')
+  await t(page, 'newDocument')
+  const touchedId = (await tabState(page)).find(x => x.active).id
+  await insert(page, 'undo-to-empty')
+  await command(page, 'edit.undo')
+  await open(page, paths[0])
+  check('opening does not replace an edited-then-undone Untitled', (await tabState(page)).some(x => x.id === touchedId))
+  await t(page, 'closeTab')
+  await activate(page, (await tabState(page)).findIndex(x => x.id === touchedId))
+  await t(page, 'closeTab')
 
   // Opening from quick-open, folder tree and the OS keeps dirty work in place.
   await activate(page, 0)
@@ -221,6 +232,9 @@ try {
   await page.keyboard.press('Home')
   await page.keyboard.press('ArrowRight')
   check('tablist arrow keys and roving focus', (await tabState(page))[1].active && await page.getByRole('tab').nth(1).evaluate(el => el === document.activeElement))
+  const keyboardMoved = (await tabState(page))[1].id
+  await page.keyboard.press('Alt+Shift+ArrowRight')
+  check('keyboard reorder retains focus and identity', (await tabState(page))[2].id === keyboardMoved && await page.getByRole('tab').nth(2).evaluate(el => el === document.activeElement))
   for (const path of paths.slice(5)) await open(page, path)
   check('tab strip overflows horizontally', await page.locator('#tab-list').evaluate(el => el.scrollWidth > el.clientWidth))
   await page.getByRole('tab').last().click({ button: 'middle' })
@@ -229,6 +243,7 @@ try {
     await app.evaluate(({ nativeTheme }, dark) => { nativeTheme.themeSource = dark ? 'dark' : 'light' }, dark)
     await page.waitForFunction(d => document.documentElement.classList.contains('dark') === d, dark)
     check(`${dark ? 'dark' : 'light'} theme tab strip`, await page.getByRole('tablist').isVisible())
+    if (process.env.TYPING_TABS_SHOTS) await page.screenshot({ path: `${process.env.TYPING_TABS_SHOTS}-${dark ? 'dark' : 'light'}.png` })
   }
   check('no renderer errors during tab integration', errors.length === 0, errors.join(' | '))
   await stop(app)
@@ -255,6 +270,18 @@ try {
   check('all recovered tabs remain dirty', (await tabState(restored.page)).every(x => x.dirty))
   check('recovery preserves durable draft identities', (await tabState(restored.page)).every(x => records.includes(`${x.id}.json`)))
   await stop(restored.app)
+
+  const autosaveData = join(work, 'autosave')
+  await fs.mkdir(autosaveData)
+  await fs.writeFile(join(autosaveData, 'preferences.json'), JSON.stringify({ autoSave: true, autoSaveMs: 350, showOutline: false }))
+  const automatic = await launch(autosaveData)
+  await open(automatic.page, paths[0]); await insert(automatic.page, 'AUTO_FIRST')
+  await open(automatic.page, paths[2]); await insert(automatic.page, 'AUTO_SECOND')
+  await t(automatic.page, 'newDocument')
+  await automatic.page.waitForFunction(() => window.__typingTest.tabs().every(t => !t.dirty), null, { timeout: 7000 })
+  const firstAuto = await fs.readFile(paths[0], 'utf8'), secondAuto = await fs.readFile(paths[2], 'utf8')
+  check('background autosave writes each tab only to its own file', firstAuto.includes('AUTO_FIRST') && !firstAuto.includes('AUTO_SECOND') && secondAuto.includes('AUTO_SECOND') && !secondAuto.includes('AUTO_FIRST'))
+  await stop(automatic.app)
 
   const stress = await launch(join(work, 'stress'), [large, paths[0]])
   await stress.page.waitForFunction(() => window.__typingTest.tabs().length === 2)
@@ -285,19 +312,28 @@ try {
   // Warm the editor/parser and filesystem caches before measuring retained memory.
   for (let i = 0; i < 5; i++) { assert.ok(await open(stress.page, paths[2])); await t(stress.page, 'closeTab') }
   const before = await heap()
+  const heapSamples = []
   for (let i = 0; i < 50; i++) {
     await open(stress.page, large) // existing large tab focuses; then test a disposable large copy
     const copy = join(docs, 'cycle.md')
     if (i === 0) await fs.copyFile(large, copy)
     assert.ok(await open(stress.page, copy))
-    await t(stress.page, 'closeTab')
+    await insert(stress.page, 'DISCARD_CYCLE')
+    await closeAnswer(stress.page, "Don't Save")
+    if ([9, 24, 49].includes(i)) heapSamples.push({ cycles: i + 1, bytes: await heap() })
   }
   const after = await heap()
-  perf = { documentBytes: (await fs.stat(large)).size, switches: 40, switchSyncMedianMs: percentile(latency.sync, .5), switchSyncP95Ms: percentile(latency.sync, .95), switchTwoFramesMedianMs: percentile(latency.presented, .5), switchTwoFramesP95Ms: percentile(latency.presented, .95), cycles: 50, heapBeforeBytes: before, heapAfterBytes: after, heapDeltaBytes: after - before }
+  perf = { documentBytes: (await fs.stat(large)).size, switches: 40, switchSyncMedianMs: percentile(latency.sync, .5), switchSyncP95Ms: percentile(latency.sync, .95), switchTwoFramesMedianMs: percentile(latency.presented, .5), switchTwoFramesP95Ms: percentile(latency.presented, .95), cycles: 50, heapBeforeBytes: before, heapAfterBytes: after, heapDeltaBytes: after - before, heapSamples }
   check('1 MB tab switches stay fast', perf.switchSyncP95Ms < 100, JSON.stringify(perf))
-  check('50 large open/close cycles release views and bounded retained heap', (await tabState(stress.page)).length === 2 && after - before < 20 * 1024 * 1024, `${((after - before) / 1024 / 1024).toFixed(2)} MiB retained delta`)
+  check('50 large dirty open/discard cycles release views and bounded retained heap', (await tabState(stress.page)).length === 2 && after - before < 20 * 1024 * 1024 && heapSamples.at(-1).bytes - heapSamples[0].bytes < 5 * 1024 * 1024, `${((after - before) / 1024 / 1024).toFixed(2)} MiB retained delta`)
   check('no stress renderer errors', stress.errors.length === 0, stress.errors.join(' | '))
   await stop(stress.app)
+  const last = await launch(join(work, 'last-tab'))
+  const lastClosed = last.page.waitForEvent('close')
+  await last.page.keyboard.press('ControlOrMeta+w').catch(error => { if (!last.page.isClosed()) throw error })
+  await lastClosed
+  check('closing the last tab closes the window', last.page.isClosed())
+  await stop(last.app)
   console.log(`\n${results.length} tab checks passed`)
 } catch (error) {
   console.error(error)

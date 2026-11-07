@@ -194,8 +194,8 @@ async function measureBounded(file, label) {
 async function main() {
   runDir = await fs.mkdtemp(join(tmpdir(), 'typing-perf-'))
   console.log(`work directory: ${runDir}`)
-  execFileSync('node', [join(here, 'generate.mjs')], { stdio: 'inherit' })
-  const generated = join(here, 'generated')
+  const generated = join(runDir, 'generated')
+  execFileSync('node', [join(here, 'generate.mjs'), generated], { stdio: 'inherit' })
 
   const files = [
     { path: join(generated, 'everyday-100kb.md'), label: 'everyday' },
@@ -214,8 +214,9 @@ async function main() {
     if (result.errors.length) console.log('  errors:', result.errors.slice(0, 3))
   }
 
-  await fs.writeFile(join(here, 'last-run.json'), JSON.stringify(report, null, 2))
-  console.log('\nwrote test/perf/last-run.json')
+  const reportPath = process.env.TYPING_PERF_OUTPUT ?? join(here, 'last-run.json')
+  await fs.writeFile(reportPath, JSON.stringify(report, null, 2))
+  console.log(`\nwrote ${reportPath}`)
 }
 
 try {

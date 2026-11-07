@@ -502,6 +502,10 @@ export function shortcutsDialog(platform: string = PLATFORM): void {
   // this list is correct on macOS and Windows without a second copy of the keys.
   const rows: Array<[string, string]> = [
     ['New / Open / Save', many('doc.new', 'doc.open', 'doc.save')],
+    ['New tab / Close tab', many('tab.new', 'tab.close')],
+    ['Next / Previous tab', many('tab.next', 'tab.previous')],
+    ['Next / Previous (alternate)', many('tab.nextAlt', 'tab.previousAlt')],
+    ['Tab 1–8 / Last tab', `${k('tab.jump1')}…${k('tab.jump8')} · ${k('tab.jump9')}`],
     ['Save As', k('doc.saveAs')],
     ['Source code mode', k('view.source')],
     ['Quick open', k('nav.quickOpen')],
@@ -565,7 +569,10 @@ export function confirmDialog(title: string, message: string, confirmLabel: stri
       }
     ])
     const observer = new MutationObserver(() => {
-      if (!document.body.contains(handle.root) && !settled) resolve(false)
+      if (settled || !document.body.contains(handle.root)) {
+        observer.disconnect()
+        if (!settled) resolve(false)
+      }
     })
     observer.observe(overlay(), { childList: true })
   })
@@ -593,6 +600,7 @@ export function choiceDialog(
     let settled = false
     const finish = (value: string | null, close: () => void): void => {
       settled = true
+      observer.disconnect()
       close()
       resolve(value)
     }

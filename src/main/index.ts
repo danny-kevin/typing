@@ -105,20 +105,22 @@ async function addAssetRoot(dir: string): Promise<void> {
   }
 }
 
-async function readFileForEditor(path: string): Promise<unknown> {
+async function readFileForEditor(path: string, track = true): Promise<unknown> {
   const abs = await fs.realpath(resolve(path)).catch(() => resolve(path))
   try {
     const bytes = new Uint8Array(await fs.readFile(abs))
     const doc = decodeDoc(bytes)
-    await addAssetRoot(dirname(abs))
     const st = await fs.stat(abs)
-    watchDocument(abs, st.mtimeMs, st.size)
-    const recents = await readJson<{ items: RecentFile[] }>(recentsPath(), { items: [] })
-    const items = [
-      { path: abs, name: basename(abs), openedAt: Date.now() },
-      ...recents.items.filter((r) => r.path !== abs)
-    ].slice(0, 25)
-    await writeJson(recentsPath(), { items })
+    if (track) {
+      await addAssetRoot(dirname(abs))
+      watchDocument(abs, st.mtimeMs, st.size)
+      const recents = await readJson<{ items: RecentFile[] }>(recentsPath(), { items: [] })
+      const items = [
+        { path: abs, name: basename(abs), openedAt: Date.now() },
+        ...recents.items.filter((r) => r.path !== abs)
+      ].slice(0, 25)
+      await writeJson(recentsPath(), { items })
+    }
     return {
       ok: true,
       path: abs,
@@ -244,6 +246,9 @@ const handlers: Record<string, Handler> = {
   },
   async 'file.read'([path]) {
     return readFileForEditor(String(path))
+  },
+  async 'file.peek'([path]) {
+    return readFileForEditor(String(path), false)
   },
   async 'file.release'([path]) {
     unwatchDocument(String(path))

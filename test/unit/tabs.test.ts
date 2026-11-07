@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import { Tabs } from '../../src/renderer/src/tabs'
+import { EditorState } from '@codemirror/state'
+import { history, undoDepth } from '@codemirror/commands'
 
 describe('tab collection', () => {
+  it('retains actual CodeMirror buffers, histories, selection and document metadata by identity', () => {
+    const a = { path: '/a', buffer: EditorState.create({ doc: 'first', extensions: history() }), savedText: 'first', eol: '\r\n', lineEndings: 'cl', bom: true, validUtf8: false, baseHash: 'a-hash', externalChange: true, recoveryKey: 'a', sourceMode: true }
+    const b = { ...a, path: '/b', buffer: EditorState.create({ doc: 'second', extensions: history() }), eol: '\n', bom: false, validUtf8: true, baseHash: 'b-hash', externalChange: false, recoveryKey: 'b', sourceMode: false }
+    const tabs = new Tabs<typeof a>()
+    tabs.add(a); tabs.add(b)
+    a.buffer = a.buffer.update({ changes: { from: 5, insert: ' edit' }, selection: { anchor: 1, head: 4 } }).state
+    tabs.active = a
+    expect(tabs.active.buffer.doc.toString()).toBe('first edit')
+    expect(tabs.active.buffer.selection.main.toJSON()).toEqual({ anchor: 1, head: 4 })
+    expect(undoDepth(a.buffer)).toBe(1)
+    expect(undoDepth(b.buffer)).toBe(0)
+    tabs.move(a, 1)
+    tabs.close(b)
+    expect(tabs.active).toBe(a)
+    expect(a).toMatchObject({ eol: '\r\n', lineEndings: 'cl', bom: true, validUtf8: false, baseHash: 'a-hash', externalChange: true, recoveryKey: 'a', sourceMode: true, savedText: 'first' })
+  })
+
   it('normalizes Windows paths without conflating case-sensitive POSIX files', () => {
     const win = new Tabs('win32')
     const a = { path: 'C:\\Notes\\a.md' }

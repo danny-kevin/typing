@@ -221,6 +221,9 @@ async function main() {
     check('PDF export writes a valid PDF', pdfResult?.ok && pdfBytes.subarray(0, 5).toString() === '%PDF-', `${pdfBytes.length} bytes`)
 
     // ---- source fidelity on the corpus --------------------------------
+    // Resident per-tab views render this corpus image immediately. Supply its
+    // local fixture instead of depending on a reused single editor's viewport.
+    await fs.writeFile(join(assetsDir, 'picture.png'), Buffer.from(PNG_1x1, 'base64'))
     const corpusDir = join(projectRoot, 'test/corpus')
     const corpusFiles = (await fs.readdir(corpusDir)).filter((f) => f.endsWith('.md')).sort()
     let fidelityOk = 0
@@ -304,6 +307,9 @@ async function main() {
       console.log('\nRenderer errors:')
       for (const l of logs.slice(0, 10)) console.log('   ', l)
     }
+    // Teardown is not a user quit: background dirty tabs must not leave this
+    // isolated test instance waiting on additional close-guard dialogs.
+    await app.evaluate(({ BrowserWindow }) => { for (const win of BrowserWindow.getAllWindows()) win.destroy() }).catch(() => {})
     await app.close().catch(() => {})
   }
 

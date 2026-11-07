@@ -167,6 +167,7 @@ function applyShortcutLabels(): void {
   set('find-prev', 'Previous', 'find.prev')
   set('find-next', 'Next', 'find.next')
   set('btn-open-folder', 'Open folder', 'doc.openFolder')
+  set('btn-new-tab', 'New tab', 'tab.new')
 }
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => applyThemeClass(event.matches))
@@ -455,6 +456,7 @@ function renderTabs(): void {
           e.preventDefault()
           tabs.move(tab, tabs.items.indexOf(tab) + (e.key === 'ArrowRight' ? 1 : -1))
           renderTabs()
+          $(`tab-${tab.id}`).focus()
           return
         }
         if (e.key === 'ArrowRight') next = tabs.relative(1)
@@ -505,16 +507,13 @@ function resetFindState(): void {
 }
 
 /**
- * The one gate every document switch goes through (new, open, quick open, file
- * tree, recents, drag and drop, an external open request, close and quit).
+ * The per-document gate for closing a tab, a window, or quitting. Opening and
+ * switching tabs never discard a document and therefore do not need this gate.
  *
- * Returns true only when it is safe to replace the editor's contents: the save
+ * Returns true only when it is safe to close this tab: the save
  * the user asked for finished, or the user explicitly chose to discard. A failed
  * save, a cancelled Save As, or an unresolved conflict with another writer all
- * return false so the switch is abandoned and the text stays put.
- *
- * Kept deliberately small and side-effect free: the tab support that follows is
- * expected to call this same function.
+ * return false so the close is abandoned and the text stays put.
  */
 let guardInFlight = false
 
@@ -849,7 +848,7 @@ async function onExternalChange(path: string): Promise<void> {
   if (target.saveTask) await target.saveTask
   if (!tabs.items.includes(target) || target.path !== path) return
   const generation = target.generation
-  const result = (await api.call('file.read', path)) as FileReadResult & { ok: boolean }
+  const result = (await api.call('file.peek', path)) as FileReadResult & { ok: boolean }
   if (!tabs.items.includes(target) || generation !== target.generation || target.path !== path) return
   if (!result.ok) {
     target.deleted = true
@@ -908,7 +907,7 @@ async function offerRecovery(): Promise<void> {
       continue
     }
     if (draft.path) {
-      const disk = (await api.call('file.read', draft.path)) as FileReadResult & { ok: boolean }
+      const disk = (await api.call('file.peek', draft.path)) as FileReadResult & { ok: boolean }
       // Nothing to recover when the file already contains this text.
       if (disk.ok && disk.text === draft.text) {
         await api.call('recovery.clear', key)
@@ -1140,8 +1139,7 @@ function readFileAsDataUrl(file: File | Blob): Promise<string> {
   })
 }
 
-async function insertImageData(dataUrl: string, suggestedName: string): Promise<void> {
-  const target = doc
+async function insertImageData(dataUrl: string, suggestedName: string, target = doc): Promise<void> {
   const generation = target.generation
   const result = await api.call('assets.saveImage', {
     docPath: target.path,
@@ -1176,16 +1174,16 @@ function wireDragAndDrop(): void {
     if (!dt) return
     const files = Array.from(dt.files ?? [])
     if (!files.length) return
+    const target = doc
     const pos = editor.view.posAtCoords({ x: e.clientX, y: e.clientY })
     if (pos !== null) editor.setSelection(pos)
     for (const file of files) {
       const path = api.pathForFile(file)
       if (!path) continue
       if (file.type.startsWith('image/')) {
-        await insertImageData(await readFileAsDataUrl(file), file.name)
+        await insertImageData(await readFileAsDataUrl(file), file.name, target)
       } else if (/\.(md|markdown|mdown|mkd|mdx|txt)$/i.test(path)) {
-        // Dropping a file into the window is another way of leaving the current
-        // document, so it goes through the same guard.
+        // File drops share the same deduplicating, non-destructive tab opener.
         await openFile(path)
       }
     }
@@ -1201,12 +1199,13 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
   if (now - lastPasteHandled < 300) return
   const data = e.clipboardData
   if (!data) return
+  const target = doc
   const files = Array.from(data.files ?? []).filter((f) => f.type.startsWith('image/'))
   if (files.length) {
     e.preventDefault()
     lastPasteHandled = now
     for (const file of files) {
-      await insertImageData(await readFileAsDataUrl(file), file.name || 'pasted-image')
+      await insertImageData(await readFileAsDataUrl(file), file.name || 'pasted-image', target)
     }
     return
   }
@@ -1215,7 +1214,7 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
     if (dataUrl) {
       e.preventDefault()
       lastPasteHandled = now
-      await insertImageData(dataUrl, 'pasted-image')
+      await insertImageData(dataUrl, 'pasted-image', target)
     }
   }
 }
@@ -1582,17 +1581,20 @@ function exportBaseName(): string {
 }
 
 async function exportHtml(): Promise<void> {
-  const html = await buildExportHtml(editor.getText(), { title: exportBaseName(), docPath: doc.path })
-  const suggested = doc.path ? doc.path.replace(/\.md$/i, '.html') : joinPath(folderRoot ?? '', 'Untitled.html')
+  const path = doc.path
+  const html = await buildExportHtml(editor.getText(), { title: exportBaseName(), docPath: path })
+  const suggested = path ? path.replace(/\.md$/i, '.html') : joinPath(folderRoot ?? '', 'Untitled.html')
   const result = await api.call('export.html', { html, suggestedPath: suggested })
   if (result?.ok) ui.toast('HTML exported')
   else if (result?.error && result.error !== 'canceled') ui.showBanner(`Export failed: ${result.error}`, [{ label: 'Dismiss', onClick: ui.hideBanner }])
 }
 
 async function exportPdf(): Promise<void> {
-  const html = await buildExportHtml(editor.getText(), { title: exportBaseName(), docPath: doc.path })
-  const suggested = doc.path ? doc.path.replace(/\.md$/i, '.pdf') : joinPath(folderRoot ?? '', 'Untitled.pdf')
-  const result = await api.call('export.pdf', { html, suggestedPath: suggested, title: exportBaseName() })
+  const path = doc.path
+  const title = exportBaseName()
+  const html = await buildExportHtml(editor.getText(), { title, docPath: path })
+  const suggested = path ? path.replace(/\.md$/i, '.pdf') : joinPath(folderRoot ?? '', 'Untitled.pdf')
+  const result = await api.call('export.pdf', { html, suggestedPath: suggested, title })
   if (result?.ok) ui.toast('PDF exported')
   else if (result?.error && result.error !== 'canceled') ui.showBanner(`Export failed: ${result.error}`, [{ label: 'Dismiss', onClick: ui.hideBanner }])
 }
