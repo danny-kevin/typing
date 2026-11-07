@@ -309,9 +309,9 @@ Built on the Mac, no wine, no Windows machine, no signing certificate:
   • packaging       platform=win32 arch=x64 electron=45.2.3 appOutDir=release/win-unpacked
   • no code signing certificate configured, signing is skipped
   • building        target=zip arch=x64 file=release/Typing-0.1.0-win-x64.zip
-release/win-unpacked/Typing.exe                     250,167,808 bytes (238.6 MiB)
-release/win-unpacked/                               372 MB
-release/Typing-0.1.0-win-x64.zip                    156,745,004 bytes
+release/win-unpacked/Typing.exe                    250.2 MB (238.6 MiB)
+release/win-unpacked/                              372 MB
+release/Typing-0.1.0-win-x64.zip                   156.7 MB
 ```
 
 ### 9.4 Windows package verification — `npm run verify:win`
@@ -323,7 +323,7 @@ release/Typing-0.1.0-win-x64.zip                    156,745,004 bytes
 What it checked, from `scripts/check-win-package.mjs`:
 
 - `Typing.exe` is `MZ` + `PE\0\0`, optional-header magic `0x20b` (**PE32+**,
-  64-bit), machine `0x8664` (**x64**), Windows GUI subsystem; 250,167,808 bytes.
+  64-bit), machine `0x8664` (**x64**), Windows GUI subsystem; 250.2 MB.
 - `Typing.exe` embeds all 7 icon sizes from `build/icon.ico` (16–256 px) and
   carries the product name and version in its version resource — so the icon step
   did not need wine and was not skipped.
