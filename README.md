@@ -30,7 +30,7 @@ work. See [USAGE.md](USAGE.md) for navigation keys and recovery behaviour.
 Session restore is deliberately not implemented: clean tabs are not reopened on
 launch. Crash recovery offers every unsaved tab instead. Editors are retained
 while open and destroyed on close. A measured 1,080,890-byte document switched in
-12.8 ms median / 19.0 ms p95 (synchronous work); 50 large dirty-tab open/discard
+15.7 ms median / 20.0 ms p95 (synchronous work); 50 large dirty-tab open/discard
 cycles showed a renderer-heap plateau after warm-up. See [TESTLOG.md](TESTLOG.md)
 for the measurements, methodology and limits.
 

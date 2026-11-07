@@ -34,7 +34,8 @@ Recent files, quick open, the folder tree, file drops, command-line arguments an
 Finder/Dock requests use the same tab opener. An already-open file focuses its
 tab, including symlink aliases; an untouched empty Untitled tab is replaced
 instead of left behind. Quick open ranks an exact filename before name prefixes
-and fuzzy matches.
+and fuzzy matches. On macOS the application stays running after its last window
+closes; New Tab or a Finder/Dock file request opens a fresh window.
 
 Closing a dirty tab asks **Save**, **Don't Save** or **Cancel** for that document.
 Save on Untitled asks where to put it first. A failed save, a cancelled Save As

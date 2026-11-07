@@ -13,7 +13,7 @@ Environment: macOS 26.6.2 (25G83), arm64; Node 26.4.0; packaged Electron
 | `npm run smoke:features` | 28/28 |
 | `npm run smoke:caret` | 27/27 |
 | `npm run smoke:datasafety` | 63/63 |
-| `npm run smoke:tabs` | 57/57, including keyboard reorder and last-tab window close |
+| `npm run smoke:tabs` | 59/59, including keyboard reorder, last-tab close and macOS window recreation |
 | `npm run perf` | both documents completed within the existing 150s/document, 300s/run watchdogs; no renderer errors |
 | `npm run package` | macOS arm64 app built and ad-hoc signed |
 | `npm run package:win` | Windows x64 zip built; bundled verification 46/46 |
@@ -29,6 +29,8 @@ mixed endings and base hash; reorders tabs via a real drag; checks overflow,
 keyboard navigation, tab shortcuts, and light/dark strips. A SIGKILL/relaunch
 restores four dirty tabs (one named plus three Untitled) under their stable draft
 keys. Background autosave writes two different files without crossing their text.
+After the last window closes on macOS, both the native New Tab menu item and a
+Finder open-file event recreate a window with exactly one appropriate tab.
 
 ### Measurements
 
@@ -41,8 +43,8 @@ undone empty Untitled is not mistaken for an untouched tab.
 
 | Metric | Median | p95 |
 | --- | ---: | ---: |
-| Synchronous tab activation | 12.8 ms | 19.0 ms |
-| Activation through two animation-frame callbacks | 15.5 ms | 22.8 ms |
+| Synchronous tab activation | 15.7 ms | 20.0 ms |
+| Activation through two animation-frame callbacks | 16.5 ms | 28.1 ms |
 | Existing benchmark, ~100 KB typing → frame | 4.9 ms | 7.9 ms |
 | Existing benchmark, ~1 MB typing → frame | 15.8 ms | 27.8 ms |
 | Existing benchmark, ~100 KB scroll step | 13.9 ms | 68.5 ms |
@@ -52,9 +54,9 @@ Benchmark cold launch: 570 ms / 688 ms for the small/large document. The frame
 measurements are renderer callbacks, not a high-speed recording of visible pixels.
 
 The tab suite then opened a fresh 1.08 MB copy, edited it and closed it with
-Don't Save **50 times**. CDP full-GC JS heap: 13,926,512 bytes before; 19,902,280
-after 10 cycles; 19,387,800 after 25; 20,133,540 after 50; final 20,130,200.
-Total delta 5.92 MiB, but only about 226 KiB from cycle 10 to 50: warm-up followed
+Don't Save **50 times**. CDP full-GC JS heap: 14,707,392 bytes before; 20,121,644
+after 10 cycles; 20,580,844 after 25; 20,036,432 after 50; final 20,033,092.
+Total delta 5.08 MiB, with cycle 50 about 83 KiB below cycle 10: warm-up followed
 by a plateau, not retained editor growth per close. Exactly two original tabs
 remained. This measures renderer JS heap and released view/tab identities, not
 whole-process RSS or a proof over an infinite run. Settled close/recovery dialog
