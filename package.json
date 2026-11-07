@@ -20,6 +20,7 @@
     "smoke:features": "node test/smoke/features.mjs",
     "smoke:caret": "node test/smoke/caret.mjs",
     "smoke:datasafety": "node test/smoke/datasafety.mjs",
+    "smoke:tabs": "node test/smoke/tabs.mjs",
     "perf": "node test/perf/bench.mjs",
     "icon": "node scripts/make-icon.mjs",
     "typecheck": "tsc --noEmit"

@@ -8,7 +8,7 @@
  *   node test/smoke/datasafety.mjs [path-to-Typing.app]
  *
  * Sections:
- *   1. the unsaved-work guard (new, open, quick open, close, cancelled/failed save)
+ *   1. per-tab close guard, non-destructive new/open, cancelled/failed save
  *   2. undo history and in-flight saves do not leak across documents
  *   3. mixed CRLF/LF/lone-CR files, with and without a BOM
  *   4. files that are not valid UTF-8
@@ -182,17 +182,17 @@ console.log('\n1. Unsaved-work guard')
     // Keep the timing deterministic: autosave is exercised separately below.
     check('autosave can be switched off in Preferences', await setAutosave(page, false))
 
-    // ---- the reported bug: new document with an untitled draft ------------
+    // ---- Closing an untitled draft uses the original unsaved-work guard ---
     await openFile(page, 'plain.md')
     await page.evaluate(() => window.__typingTest.newDocument())
     await page.waitForTimeout(400)
     await page.locator('.cm-content').click()
     await page.keyboard.type('UNSAVED_SENTINEL')
     await page.waitForTimeout(300)
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(700)
     const title = await dialogTitle(page)
-    check('⌘N on an untitled draft asks before discarding it', /unsaved/i.test(title ?? ''), String(title))
+    check('close tab on an untitled draft asks before discarding it', /unsaved/i.test(title ?? ''), String(title))
     check('the draft is still in the editor while the question is open', (await text(page)).includes('UNSAVED_SENTINEL'))
 
     await clickDialog(page, 'Cancel')
@@ -201,7 +201,7 @@ console.log('\n1. Unsaved-work guard')
 
     // A cancelled Save As must not switch either: the old code ignored the result.
     await fs.writeFile(saveAsScript, 'canceled', 'utf8')
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(600)
     await clickDialog(page, 'Save')
     await page.waitForTimeout(700)
@@ -211,10 +211,11 @@ console.log('\n1. Unsaved-work guard')
     // Save on an untitled draft goes through Save As, and only then switches.
     const rescuedTarget = docPath('rescued-draft.md')
     await fs.writeFile(saveAsScript, rescuedTarget, 'utf8')
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(600)
     await clickDialog(page, 'Save')
     await page.waitForTimeout(1200)
+    await page.evaluate(() => window.__typingTest.newDocument())
     const rescued = await fs.readFile(rescuedTarget, 'utf8').catch(() => '')
     check('Save on an untitled draft writes the text through Save As', rescued.includes('UNSAVED_SENTINEL'), rescued.slice(0, 40))
     check('the switch happens only after the save finished', (await text(page)) === '')
@@ -223,23 +224,26 @@ console.log('\n1. Unsaved-work guard')
 
     // ---- named, dirty document ------------------------------------------
     await openFile(page, 'second.md')
+    // Keep an empty neighbour to select after this tab is closed.
+    await page.evaluate(() => window.__typingTest.newDocument())
+    await openFile(page, 'second.md')
     await focusEnd(page)
     await poke(page)
     await page.keyboard.type('NAMED_EDIT')
     await page.waitForTimeout(150)
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(700)
-    check('⌘N on a named dirty document asks too', /unsaved/i.test((await dialogTitle(page)) ?? ''))
+    check('close tab on a named dirty document asks too', /unsaved/i.test((await dialogTitle(page)) ?? ''))
     await clickDialog(page, 'Cancel')
     check('Cancel keeps the named document and its edit', (await text(page)).includes('NAMED_EDIT'))
     check('Cancel did not write anything to disk', !(await readText('second.md')).includes('NAMED_EDIT'))
 
     await poke(page)
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(600)
     await clickDialog(page, "Don't Save")
     await page.waitForTimeout(500)
-    check("Don't Save switches to a new empty document", (await text(page)) === '')
+    check("Don't Save closes the tab and returns to a new empty document", (await text(page)) === '')
     check("Don't Save leaves the file on disk untouched", !(await readText('second.md')).includes('NAMED_EDIT'))
 
     await openFile(page, 'plain.md')
@@ -247,7 +251,7 @@ console.log('\n1. Unsaved-work guard')
     await poke(page)
     await page.keyboard.type('SAVE_THEN_SWITCH')
     await page.waitForTimeout(150)
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(600)
     await clickDialog(page, 'Save')
     await page.waitForTimeout(1200)
@@ -268,12 +272,12 @@ console.log('\n1. Unsaved-work guard')
     await page.keyboard.press('Enter')
     await page.waitForTimeout(900)
     check(
-      'quick open asks before replacing unsaved work',
-      quickOpenShown && /unsaved/i.test((await dialogTitle(page)) ?? ''),
+      'quick open opens another tab without discarding unsaved work',
+      quickOpenShown && !(await dialogTitle(page)) && (await state(page)).path?.endsWith('second.md'),
       String(await dialogTitle(page))
     )
-    await clickDialog(page, 'Cancel')
-    check('Cancel from quick open keeps the edited document', (await text(page)).includes('QUICK_OPEN_EDIT'))
+    await page.evaluate((p) => window.__typingTest.openFile(p), docPath('plain.md'))
+    check('returning from quick open retains the edited document', (await text(page)).includes('QUICK_OPEN_EDIT'))
 
     // ---- a file opened from the Finder / the Dock -----------------------
     // The same IPC path the OS uses: main receives `open-file` and asks the
@@ -291,9 +295,9 @@ console.log('\n1. Unsaved-work guard')
       app.emit('open-file', { preventDefault() {} }, path)
     }, docPath('second.md'))
     await page.waitForTimeout(700)
-    check('a file opened from the Finder or the Dock asks first', /unsaved/i.test((await dialogTitle(page)) ?? ''))
-    await clickDialog(page, 'Cancel')
-    check('cancelling that keeps the draft in the editor', (await text(page)).includes('FINDER_OPEN_DRAFT'))
+    check('a Finder/Dock request opens a tab without discarding work', !(await dialogTitle(page)) && (await state(page)).path?.endsWith('second.md'))
+    await page.evaluate(() => window.__typingTest.activate(window.__typingTest.tabs().findIndex(t => t.path === null && t.dirty)))
+    check('the Finder/Dock request kept the untitled draft', (await text(page)).includes('FINDER_OPEN_DRAFT'))
 
     // ---- window close ---------------------------------------------------
     await poke(page)
@@ -312,22 +316,23 @@ console.log('\n1. Unsaved-work guard')
   }
 }
 
-console.log('\n1b. A pending autosave is dropped when the document is left')
+console.log('\n1b. A pending autosave is dropped when its tab is discarded')
 {
   // Fresh instance whose document is clean at launch, autosave on (the default).
   const { app, page, logs } = await launch([docPath('second.md')])
   try {
     const before = await readText('second.md')
+    await page.evaluate(async () => { await window.__typingTest.newDocument(); window.__typingTest.activate(0) })
     await focusEnd(page)
     await page.keyboard.type('AUTOSAVE_MUST_NOT_LEAK')
     await page.waitForTimeout(150)
-    await page.keyboard.press('ControlOrMeta+n')
+    await page.keyboard.press('ControlOrMeta+w')
     await page.waitForTimeout(500)
     await clickDialog(page, "Don't Save")
     await page.waitForTimeout(2400)
     const after = await readText('second.md')
     check(
-      'a pending autosave is dropped when the document is left',
+      'a pending autosave is dropped when its tab is discarded',
       after === before && !after.includes('AUTOSAVE_MUST_NOT_LEAK'),
       after.slice(-44).replace(/\n/g, '\\n')
     )
