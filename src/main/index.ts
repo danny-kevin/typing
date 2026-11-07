@@ -36,6 +36,8 @@ if (userDataOverride) {
 
 let mainWindow: BrowserWindow | null = null
 let rendererReady = false
+let windowSetupReady = false
+const pendingCommands: string[] = []
 /** Set once the renderer has confirmed that closing is safe. */
 let allowClose = false
 let quitRequested = false
@@ -179,6 +181,7 @@ const handlers: Record<string, Handler> = {
   async 'renderer.ready'() {
     rendererReady = true
     for (const path of pendingOpenPaths.splice(0)) openPathFromOutside(path)
+    for (const command of pendingCommands.splice(0)) sendCommand(command)
     return true
   },
   async appInfo() {
@@ -545,6 +548,14 @@ function applyTheme(mode: Prefs['theme']): void {
 }
 
 function sendCommand(command: string, payload?: unknown): void {
+  if (!mainWindow && windowSetupReady && command !== 'app.close') {
+    // On macOS closing the last tab leaves the application running. New opens
+    // one initial tab; other menu commands wait until its renderer is ready.
+    if (!['doc.new', 'tab.new'].includes(command)) pendingCommands.push(command)
+    createWindow()
+    return
+  }
+  if (mainWindow && !rendererReady) { pendingCommands.push(command); return }
   mainWindow?.webContents.send('typing:event', 'menu:command', { command, payload })
 }
 
@@ -622,6 +633,7 @@ app.on('open-file', (event, path) => {
     mainWindow.focus()
   } else {
     pendingOpenPaths.push(path)
+    if (windowSetupReady) createWindow()
   }
 })
 
@@ -650,7 +662,10 @@ if (!gotLock) {
   app.on('second-instance', (_e, argv) => {
     const files = filesFromArgv(argv)
     if (mainWindow) for (const file of files) openPathFromOutside(file)
-    else pendingOpenPaths.push(...files)
+    else {
+      pendingOpenPaths.push(...files)
+      if (windowSetupReady) createWindow()
+    }
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -707,6 +722,7 @@ if (!gotLock) {
       })
     })
 
+    windowSetupReady = true
     createWindow()
     Menu.setApplicationMenu(buildMenu(sendCommand, prefs))
 

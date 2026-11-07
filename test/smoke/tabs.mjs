@@ -333,6 +333,20 @@ try {
   await last.page.keyboard.press('ControlOrMeta+w').catch(error => { if (!last.page.isClosed()) throw error })
   await lastClosed
   check('closing the last tab closes the window', last.page.isClosed())
+  if (process.platform === 'darwin') {
+    await last.app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('tab.new').click())
+    const fresh = await last.app.firstWindow()
+    await fresh.waitForSelector('.cm-content')
+    check('macOS New Tab recreates a closed window with one Untitled', (await tabState(fresh)).length === 1 && (await tabState(fresh))[0].path === null)
+    const freshClosed = fresh.waitForEvent('close')
+    await fresh.keyboard.press('ControlOrMeta+w').catch(error => { if (!fresh.isClosed()) throw error })
+    await freshClosed
+    await last.app.evaluate(({ app }, path) => app.emit('open-file', { preventDefault() {} }, path), paths[0])
+    const reopened = await last.app.firstWindow()
+    await reopened.waitForSelector('.cm-content')
+    await reopened.waitForFunction(() => window.__typingTest?.path()?.endsWith('document-1.md'))
+    check('macOS Finder open recreates a closed window and opens its tab', (await tabState(reopened)).length === 1)
+  }
   await stop(last.app)
   console.log(`\n${results.length} tab checks passed`)
 } catch (error) {
